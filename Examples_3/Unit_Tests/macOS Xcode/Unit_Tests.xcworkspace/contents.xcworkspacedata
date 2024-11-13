@@ -10,6 +10,9 @@
       <FileRef
          location = "group:36_AlgorithmsAndContainers/36_AlgorithmsAndContainers.xcodeproj">
       </FileRef>
+      <FileRef
+         location = "group:40_CPUComputeShaders/40_CPUComputeShaders.xcodeproj">
+      </FileRef>
    </Group>
    <Group
       location = "container:"

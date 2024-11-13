@@ -1,0 +1,26 @@
+#include "fsl_ext.h"
+#include "resources.h.fsl"
+
+RES(RWBuffer(float), gOutput, UPDATE_FREQ_NONE, u0, binding = 0);
+RES(CBUFFER(ComputeTestData), gSettings, UPDATE_FREQ_NONE, b0, binding = 1);
+
+NUM_THREADS(8, 8, 1)
+void CS_MAIN(SV_DispatchThreadID(uint2) tid) 
+{
+    INIT_MAIN;
+    
+    if (tid.x >= gSettings.width || tid.y >= gSettings.height)
+    {
+        RETURN();
+    }
+
+    uint index = tid.y * gSettings.width + tid.x;
+    
+    // Simple computation - use position as color
+    float value = (float)(tid.x + tid.y) / (float)(gSettings.width + gSettings.height);
+    
+    // Write to output buffer
+    gOutput[index] = value;
+
+    RETURN();
+}

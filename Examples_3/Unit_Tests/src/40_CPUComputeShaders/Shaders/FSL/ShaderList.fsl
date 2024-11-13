@@ -1,0 +1,4 @@
+
+#comp TEST_COMP test.comp
+#include "test.comp.fsl"
+#end

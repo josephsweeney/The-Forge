@@ -1,0 +1,9 @@
+#ifndef RESOURCES_H
+#define RESOURCES_H
+
+STRUCT(ComputeTestData) {
+    DATA(uint32_t, width, None);
+    DATA(uint32_t, height, None);
+};
+
+#endif
