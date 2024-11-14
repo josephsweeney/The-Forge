@@ -41,6 +41,7 @@ _config = {
     Platforms.PROSPERO:       ('SCE_PROSPERO_SDK_DIR', 'host_tools/bin/prospero-wave-psslc.exe'),
     Platforms.XBOX:           ('GXDKLATEST', 'bin/XboxOne/dxc.exe'),
     Platforms.SCARLETT:       ('GXDKLATEST', 'bin/Scarlett/dxc.exe'),
+    Platforms.ISPC:           ('FSL_COMPILER_ISPC', None),
 }
 
 def get_available_compilers():
@@ -60,7 +61,7 @@ def get_status(bin, params):
 
 def get_compiler_from_env(varname, subpath = None, _assert=True):
 
-    if os.name == 'posix' and 'metal.exe' in subpath:
+    if os.name == 'posix' and subpath and 'metal.exe' in subpath:
         return 'xcrun'
 
     if not varname in os.environ:
@@ -74,6 +75,11 @@ def get_compiler_from_env(varname, subpath = None, _assert=True):
             compiler = os.environ['FSL_COMPILER_LINUX_VK']
             subpath = subpath.replace('.exe', '')
         compiler = os.path.join(compiler, subpath)
+    
+    # For ISPC, compiler path should already be complete
+    if varname == 'FSL_COMPILER_ISPC':
+        compiler = os.environ[varname]
+
     if not os.path.exists(compiler):
         print('WARN: {} doesn\'t exist'.format(compiler))
         if _assert: assert False
@@ -117,6 +123,18 @@ def util_shadertarget_metal(platform : Platforms, binary: ShaderBinary):
         if WaveopsFlags.WAVE_OPS_ARITHMETIC_BIT in binary.waveops_flags or Features.PRIM_ID in binary.features:
             return '2.3'
     return '2.2' # default
+
+def get_ispc_target():
+    import platform
+    machine = platform.machine().lower()
+    default_target = "avx2-i32x8"
+    targets = {
+        "x86_64": "avx2-i32x8",
+        "amd64": "avx2-i32x8",
+        "arm64": "neon-i32x4",
+        "aarch64": "neon-i32x4",
+    }
+    return targets.get(machine, default_target)
 
 def compile_binary(platform: Platforms, debug: bool, binary: ShaderBinary, src, dst):
     
@@ -298,6 +316,15 @@ def compile_binary(platform: Platforms, debug: bool, binary: ShaderBinary, src, 
                 params += ['-gline-tables-only']
                 if int(vv) >= 16:
                     params += ['-frecord-sources']
+        elif platform == Platforms.ISPC:
+            target = get_ispc_target()
+            params += [f'--target={target}']
+            params += [
+                '--emit-obj',
+                '-I', fsl_basepath,
+                '-o', dst,
+                src
+            ]
 
         stages = [(bin, params)] + stages
 

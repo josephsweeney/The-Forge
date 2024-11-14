@@ -48,6 +48,11 @@ if not 'FSL_COMPILER_MACOS' in os.environ:
     os.environ['FSL_COMPILER_MACOS'] = os.path.normpath('C:/Program Files/Metal Developer Tools/macos/bin')
 if not 'FSL_COMPILER_IOS' in os.environ:
     os.environ['FSL_COMPILER_IOS'] = os.path.normpath('C:/Program Files/Metal Developer Tools/ios/bin')
+if not 'FSL_COMPILER_ISPC' in os.environ:
+    ispc_relative_path = os.path.normpath(forge_root + '/Common_3/Tools/ThirdParty/OpenSource/ISPCTextureCompressor/ISPC/' +
+        ('win' if os.name == 'nt' else ('osx' if sys.platform == 'darwin' else 'linux')) +
+        ('/ispc' + ('.exe' if os.name == 'nt' else '')))
+    os.environ['FSL_COMPILER_ISPC'] = ispc_relative_path
 
 from utils import *
 import generators, compilers

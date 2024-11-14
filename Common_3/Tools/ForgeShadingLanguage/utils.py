@@ -43,6 +43,7 @@ class Platforms(Enum):
     SWITCH =          9
     ANDROID_VULKAN = 10
     QUEST =          11
+    ISPC =           12
 
 platform_langs = {
     Platforms.DIRECT3D11:      'DIRECT3D11',
@@ -57,6 +58,7 @@ platform_langs = {
     Platforms.SWITCH :         'VULKAN',
     Platforms.ANDROID_VULKAN : 'VULKAN',
     Platforms.QUEST :          'VULKAN',
+    Platforms.ISPC :           'ISPC',
 }
 
 def get_target(platform: Platforms):
