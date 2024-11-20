@@ -317,12 +317,15 @@ def compile_binary(platform: Platforms, debug: bool, binary: ShaderBinary, src, 
                 if int(vv) >= 16:
                     params += ['-frecord-sources']
         elif platform == Platforms.ISPC:
+            compiled_filepath = dst + '.o'
+            compiled_header_path = dst + '.h'
             target = get_ispc_target()
             params += [f'--target={target}']
             params += [
                 '--emit-obj',
                 '-I', fsl_basepath,
-                '-o', dst,
+                '-o', compiled_filepath,
+                '-h', compiled_header_path,
                 src
             ]
 

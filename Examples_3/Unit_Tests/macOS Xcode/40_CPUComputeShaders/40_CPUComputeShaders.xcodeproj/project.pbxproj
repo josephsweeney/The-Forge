@@ -515,12 +515,13 @@
 			);
 			name = "Precompile Shader with ISPC";
 			outputFileListPaths = (
+				"${BUILT_PRODUCTS_DIR}/DerivedSources/ispc_outputs.xcfilelist",
 			);
 			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "[[ $CONFIGURATION = \"Debug\" ]] && debug=\"--debug\"\n\npython3 ../../../../Common_3/Tools/ForgeShadingLanguage/fsl.py --verbose \"$SRCROOT/../../src/$PROJECT_NAME/Shaders/FSL/ShaderList.fsl\" -d \"${CONFIGURATION_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Resources/Shaders/\" -b \"${CONFIGURATION_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Resources/CompiledShaders\" -i \"${CONFIGURATION_BUILD_DIR}/${CONTENTS_FOLDER_PATH}\" --cache-args -l ISPC --incremental --compile\n";
+			shellScript = "[[ $CONFIGURATION = \"Debug\" ]] && debug=\"--debug\"\n\n# Print out our directory setup\necho \"Setting up directories...\"\nDERIVED_DIR=\"${BUILT_PRODUCTS_DIR}/DerivedSources\"\necho \"DERIVED_DIR = ${DERIVED_DIR}\"\necho \"Creating directory ${DERIVED_DIR}\"\nmkdir -p \"${DERIVED_DIR}\"\nls -la \"${DERIVED_DIR}\"\n\n# Run FSL/ISPC compilation  \necho \"Running FSL/ISPC compilation...\"\npython3 ../../../../Common_3/Tools/ForgeShadingLanguage/fsl.py --verbose \"$SRCROOT/../../src/$PROJECT_NAME/Shaders/FSL/ShaderList.fsl\" -d \"${CONFIGURATION_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Resources/Shaders/\" -b \"${CONFIGURATION_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Resources/CompiledShaders/\" -i \"${CONFIGURATION_BUILD_DIR}/${CONTENTS_FOLDER_PATH}\" --cache-args -l ISPC --incremental --compile\n\n# Create output file list for dependency tracking in build directory\nOUTPUTS_FILE=\"${DERIVED_DIR}/ispc_outputs.xcfilelist\"\necho \"Creating outputs file at ${OUTPUTS_FILE}\"\necho \"# ISPC outputs\" > \"${OUTPUTS_FILE}\"\nfind \"${CONFIGURATION_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Resources/CompiledShaders/ISPC\" -type f \\( -name \"*.h\" -o -name \"*.o\" \\) -exec echo {} \\; >> \"${OUTPUTS_FILE}\"\n\n# Print contents of outputs file\necho \"Contents of ${OUTPUTS_FILE}:\"\ncat \"${OUTPUTS_FILE}\"\n\n# Create linker flags file in build directory\nLINK_FLAGS_FILE=\"${DERIVED_DIR}/ispc_linkflags.xcfilelist\"\necho \"Creating linker flags file at ${LINK_FLAGS_FILE}\"\n> \"${LINK_FLAGS_FILE}\"  # Clear file\nfind \"${CONFIGURATION_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Resources/CompiledShaders/ISPC\" -type f -name \"*.o\" -print0 | while IFS= read -r -d '' file; do\n    # Quote the path\n    echo \"\\\"$file\\\"\" >> \"${LINK_FLAGS_FILE}\"\ndone\n\n# Print contents of linker flags file\necho \"Contents of ${LINK_FLAGS_FILE}:\"\ncat \"${LINK_FLAGS_FILE}\"\n\n# Verify files exist\necho \"Checking file existence:\"\nif [ -f \"${OUTPUTS_FILE}\" ]; then\n    echo \"${OUTPUTS_FILE} exists\"\nelse\n    echo \"${OUTPUTS_FILE} does not exist\"\nfi\n\nif [ -f \"${LINK_FLAGS_FILE}\" ]; then\n    echo \"${LINK_FLAGS_FILE} exists\"\nelse\n    echo \"${LINK_FLAGS_FILE} does not exist\"\nfi\n\n# Print permissions\necho \"File permissions:\"\nls -l \"${OUTPUTS_FILE}\" || echo \"Could not get permissions for ${OUTPUTS_FILE}\"\nls -l \"${LINK_FLAGS_FILE}\" || echo \"Could not get permissions for ${LINK_FLAGS_FILE}\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -633,10 +634,18 @@
 			buildSettings = {
 				CODE_SIGN_IDENTITY = "-";
 				DEVELOPMENT_TEAM = BT67ZY58A8;
+				HEADER_SEARCH_PATHS = "\"${CONFIGURATION_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Resources/CompiledShaders\"";
 				INFOPLIST_FILE = ../../../Build_Props/XCode/MacOS/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = "\"${CONFIGURATION_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Resources/CompiledShaders/ISPC\"";
+				OTHER_LDFLAGS = (
+					"$(OLD_LINKER_FLAG_XCODE)",
+					"$(inherited)",
+					"@${BUILT_PRODUCTS_DIR}/DerivedSources/ispc_linkflags.xcfilelist",
+					"-v",
 				);
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
@@ -649,10 +658,18 @@
 			buildSettings = {
 				CODE_SIGN_IDENTITY = "-";
 				DEVELOPMENT_TEAM = BT67ZY58A8;
+				HEADER_SEARCH_PATHS = "\"${CONFIGURATION_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Resources/CompiledShaders\"";
 				INFOPLIST_FILE = ../../../Build_Props/XCode/MacOS/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = "\"${CONFIGURATION_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Resources/CompiledShaders/ISPC\"";
+				OTHER_LDFLAGS = (
+					"$(OLD_LINKER_FLAG_XCODE)",
+					"$(inherited)",
+					"@${BUILT_PRODUCTS_DIR}/DerivedSources/ispc_linkflags.xcfilelist",
+					"-v",
 				);
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;

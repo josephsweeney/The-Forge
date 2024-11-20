@@ -9,6 +9,7 @@
 #include "../../../../Common_3/Graphics/Interfaces/IGraphics.h"
 #include "../../../../Common_3/Resources/ResourceLoader/Interfaces/IResourceLoader.h"
 #include "../../../../Common_3/Utilities/Interfaces/ILog.h"
+#include "ISPC/test.comp.h"
 
 // Test parameters 
 static const uint32_t COMPUTE_TEST_WIDTH = 256;
@@ -108,7 +109,8 @@ public:
 
         // Run the compute test immediately after resource creation
         runComputeTest();
-        
+        runCPUComputeTest();
+        requestShutdown();
         return true;
     }
 
@@ -199,8 +201,29 @@ private:
         for (uint32_t i = 0; i < 10 && i < COMPUTE_TEST_WIDTH * COMPUTE_TEST_HEIGHT; i++) {
             LOGF(LogLevel::eINFO, "Output[%u] = %f", i, outputData[i]);
         }
+    }
 
-        requestShutdown();
+    void runCPUComputeTest()
+    {
+        uint32_t groupSizeX = (COMPUTE_TEST_WIDTH + 15) / 16;  // Assuming 16x16 thread groups
+        uint32_t groupSizeY = (COMPUTE_TEST_HEIGHT + 15) / 16;
+        const uint32_t numElements = COMPUTE_TEST_WIDTH * COMPUTE_TEST_HEIGHT;
+        float *outputBuffer = (float*)malloc(sizeof(float) * numElements);
+
+        const ispc::ComputeTestData settings = { 
+            .width = COMPUTE_TEST_WIDTH,
+            .height = COMPUTE_TEST_HEIGHT
+            };
+        // settings.width = COMPUTE_TEST_WIDTH;
+        // settings.height = COMPUTE_TEST_HEIGHT;
+
+        ispc::CS_MAIN(outputBuffer, settings, groupSizeX, groupSizeY, 1);
+
+        LOGF(LogLevel::eINFO, "CPU Compute Test Results:");
+        for (uint32_t i = 0; i < 10 && i < COMPUTE_TEST_WIDTH * COMPUTE_TEST_HEIGHT; i++) {
+            LOGF(LogLevel::eINFO, "CPU Output[%u] = %f", i, outputBuffer[i]);
+        }
+        free(outputBuffer);
     }
 
     // Core renderer objects
