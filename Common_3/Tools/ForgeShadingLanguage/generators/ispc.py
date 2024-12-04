@@ -23,30 +23,13 @@
 """ ISPC shader generation """
 
 from utils import Stages, DescriptorSets, WaveopsFlags, ShaderBinary, Platforms, iter_lines
-from utils import isArray, getArrayLen, getArrayBaseName, getMacroName, is_groupshared_decl
+from utils import isArray, getArrayLen, getArrayBaseName, getMacroName
 from utils import getMacroFirstArg, getHeader, getShader, getMacro, platform_langs, get_whitespace
 from utils import get_fn_table, Features
 import os, re
 
-SHORT_VECTOR_TYPES = {
-    "float2": "float<2>",
-    "float3": "float<3>",
-    "float4": "float<4>",
-    "int2": "int<2>",
-    "int3": "int<3>",
-    "int4": "int<4>",
-    "uint2": "uint<2>",
-    "uint3": "uint<3>",
-    "uint4": "uint<4>",
-    "double2": "double<2>",
-    "double3": "double<3>",
-    "double4": "double<4>",
-    "bool2": "bool<2>",
-    "bool3": "bool<3>",
-    "bool4": "bool<4>",
-}
-
 MAIN_WRAPPER_FSTRING = """export void {}({}uniform int dispatch_x, uniform int dispatch_y, uniform int dispatch_z) {{
+    {}
     uniform int total_invocations = dispatch_x * dispatch_y * dispatch_z;
     foreach (invocation = 0 ... total_invocations) {{
         // Calculate coordinates from invocation index
@@ -64,6 +47,50 @@ def extract_function_name(line):
     if match:
         return str(match.group(1))
     return None
+
+def convert_short_vector_types(line):
+    patterns = [
+        (r'\bint([234])\b', r'int<\1>'),
+        (r'\bfloat([234])\b', r'float<\1>'),
+        (r'\buint([234])\b', r'uint<\1>'),
+        (r'\bbool([234])\b', r'bool<\1>')
+    ]
+    result = line
+    for pattern, replacement in patterns:
+        result = re.sub(pattern, replacement, result)
+    
+    return result
+
+def convert_vector_constructors(line):
+    patterns = [
+        (r'\bint<([234])>\(', r'make_int\1('),
+        (r'\bfloat<([234])>\(', r'make_float\1('),
+        (r'\buint<([234])>\(', r'make_uint\1('),
+        (r'\bbool<([234])>\(', r'make_bool\1(')
+    ]
+    result = line
+    for pattern, replacement in patterns:
+        result = re.sub(pattern, replacement, result)
+    
+    return result
+
+def convert_casts(line):
+    patterns = [
+        (r'\bint\(', r'(int)('),
+        (r'\bfloat\(', r'(float)('),
+        (r'\buint\(', r'(uint)(')
+    ]
+    result = line
+    for pattern, replacement in patterns:
+        result = re.sub(pattern, replacement, result)
+    
+    return result
+
+def convert_ispc_symbols(line):
+    line = convert_short_vector_types(line)
+    line = convert_vector_constructors(line)
+    line = convert_casts(line)
+    return line
 
 def ispc(*args):
     return ispc_internal(Platforms.ISPC, *args)
@@ -106,11 +133,6 @@ def ispc_internal(platform, debug, binary: ShaderBinary, dst):
 
         shader_src_len = len(shader_src)
 
-        if is_groupshared_decl(line):
-            dtype, dname = getMacro(line)
-            basename = getArrayBaseName(dname)
-            shader_src += ['#define srt_'+basename+' '+basename+'\n']
-            line = 'groupshared '+dtype+' '+dname+';\n'
 
         if line.strip().startswith('STRUCT('):
             parsing_struct = getMacro(line)
@@ -119,7 +141,7 @@ def ispc_internal(platform, debug, binary: ShaderBinary, dst):
         if parsing_struct and line.strip().startswith('DATA('):
             data_decl = getMacro(line)
             if skip_semantics or data_decl[-1] == 'None':
-                type_name = SHORT_VECTOR_TYPES.get(data_decl[0], data_decl[0]) 
+                type_name = data_decl[0]
                 line = get_whitespace(line) + type_name + ' ' + data_decl[1] + ';\n'
 
             if Features.INVARIANT in binary.features and data_decl[2].upper() == 'SV_POSITION':
@@ -127,7 +149,7 @@ def ispc_internal(platform, debug, binary: ShaderBinary, dst):
 
         if parsing_struct and '};' in line:
 
-            shader_src += ['#line {}\n'.format(line_index), line]
+            shader_src += ['// line {}\n'.format(line_index), line]
 
             skip_semantics = False
             parsing_struct = None
@@ -141,7 +163,6 @@ def ispc_internal(platform, debug, binary: ShaderBinary, dst):
         if resource_decl:
             dtype, name, _, _, _ = resource_decl
             base_type = getMacro(dtype)  # Gets inner type
-            base_type = SHORT_VECTOR_TYPES.get(base_type, base_type)
             base_name = getArrayBaseName(name)
             is_array = isArray(name)
             is_readonly = not ('RW' in dtype or 'W' == dtype[:1])
@@ -153,7 +174,12 @@ def ispc_internal(platform, debug, binary: ShaderBinary, dst):
                 'is_array': is_array,
                 'is_readonly': is_readonly,
             }]
-            line = '// ' + line
+            global_var_decl = ""
+            if 'CBUFFER' in dtype:
+                global_var_decl = f"{base_type} {name};"
+            else:
+                global_var_decl = f"{base_type} *{base_name};"
+            line = f'{global_var_decl} // {line}'
 
         # if '_MAIN(' in line and shader.returnType:
         #     if shader.returnType not in shader.structs:
@@ -169,16 +195,18 @@ def ispc_internal(platform, debug, binary: ShaderBinary, dst):
 
         if '_MAIN(' in line:
             leading_args = ''
+            global_assignments = ''
             for res in resources:
-                main_impl_args += [res]
+                # main_impl_args += [res]
                 if 'CBUFFER' in res['type']:
-                    leading_args += f"uniform const {res['base_type']}& {res['name']},"
+                    leading_args += f"uniform const {res['base_type']}& {res['name']}_arg,"
                 else:
                     readonly = "const " if res['is_readonly'] else ""
-                    leading_args += f"uniform {readonly}{res['base_type']} {res['base_name']}[],"
+                    leading_args += f"uniform {readonly}{res['base_type']} {res['base_name']}_arg[],"
+                global_assignments += f"{res['name']} = {res['name']}_arg;\n    "
             
             main_name = extract_function_name(line)
-            line = re.sub(r'_MAIN\(', f'_MAIN_impl({leading_args}', line, count=1)
+            line = re.sub(r'_MAIN\(', f'_MAIN_impl(', line, count=1)
 
             for dtype, var in shader.struct_args:
                 line = line.replace(dtype+'('+var+')', dtype + ' ' + var)
@@ -187,15 +215,13 @@ def ispc_internal(platform, debug, binary: ShaderBinary, dst):
                 innertype = getMacro(dtype)
                 ldtype = line.find(dtype)
                 if "SV_DispatchThreadID" in dtype:
-                    numerical_type = innertype[:-1]
                     count = int(innertype[-1:])
-                    short_vector_type = f"{numerical_type}<{count}>"
-                    variable = f"{short_vector_type} {dvar}"
+                    variable = f"{innertype} {dvar}"
                     if count > 3:
                         print(f"In main function, SV_DispatchThreadID has count {count} but it must be 2 or 3")
                     arg_needed = f"{variable} = {{ {','.join(['x', 'y', 'z'][:count])} }};"
                     main_impl_args += [{
-                        "base_type": short_vector_type,
+                        "base_type": innertype,
                         "name": dvar,
                         "arg_needed": arg_needed
                     }]
@@ -205,7 +231,7 @@ def ispc_internal(platform, debug, binary: ShaderBinary, dst):
 
             impl_args = ",".join([f"{arg['name']}" for arg in main_impl_args])
             impl_declared_vars = "\n".join([arg['arg_needed'] if 'arg_needed' in arg else '' for arg in main_impl_args])
-            main_str = MAIN_WRAPPER_FSTRING.format(main_name, leading_args, impl_declared_vars, main_name, impl_args)
+            main_str = convert_ispc_symbols(MAIN_WRAPPER_FSTRING.format(main_name, leading_args, global_assignments, impl_declared_vars, main_name, impl_args))
 
         # if 'BeginNonUniformResourceIndex(' in line:
         #     index, max_index = getMacro(line), None
@@ -230,7 +256,7 @@ def ispc_internal(platform, debug, binary: ShaderBinary, dst):
             line = '//' + line
 
         if shader_src_len != len(shader_src):
-            shader_src += ['#line {}\n'.format(line_index)]
+            shader_src += ['//line {}\n'.format(line_index)]
 
         if re.match(r'#\s*\d+\s+".*"', line):
             # NOTE(joesweeney): These lines seem to include debug info that are fine in most shaders but they
@@ -238,8 +264,11 @@ def ispc_internal(platform, debug, binary: ShaderBinary, dst):
             # `# 418 "<built-in>" 3`
             line = ''
 
+        line = convert_ispc_symbols(line)
+
         shader_src += [line]
     shader_src += [main_str]
+
 
     open(dst, 'w').writelines(shader_src)
 

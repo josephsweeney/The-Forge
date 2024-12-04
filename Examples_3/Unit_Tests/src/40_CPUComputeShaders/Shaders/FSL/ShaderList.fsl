@@ -2,3 +2,7 @@
 #comp TEST_COMP test.comp
 #include "test.comp.fsl"
 #end
+
+#comp DISTFIELD_COMP distfield.comp
+#include "distfield.comp.fsl"
+#end
