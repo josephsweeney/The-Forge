@@ -205,8 +205,9 @@ def ispc_internal(platform, debug, binary: ShaderBinary, dst):
                     leading_args += f"uniform {readonly}{res['base_type']} {res['base_name']}_arg[],"
                 global_assignments += f"{res['name']} = {res['name']}_arg;\n    "
             
-            main_name = extract_function_name(line)
-            line = re.sub(r'_MAIN\(', f'_MAIN_impl(', line, count=1)
+            name_mangle = binary.filename.split(".")[0].upper()
+            main_name = extract_function_name(line) + f'_{name_mangle}'
+            line = re.sub(r'_MAIN\(', f'_MAIN_{name_mangle}_impl(', line, count=1)
 
             for dtype, var in shader.struct_args:
                 line = line.replace(dtype+'('+var+')', dtype + ' ' + var)
@@ -246,7 +247,7 @@ def ispc_internal(platform, debug, binary: ShaderBinary, dst):
         #     line = '#undef {}\n'.format(nonuniformresourceindex)
         #     nonuniformresourceindex = None
 
-        elif re.match('\s*RETURN', line):
+        elif re.match(r'\s*RETURN', line):
             if shader.returnType:
                 line = line.replace('RETURN', 'return ')
             else:

@@ -2,7 +2,7 @@
 #include "resources.h.fsl"
 
 RES(Buffer(float), gInputBuffer, UPDATE_FREQ_NONE, t0, binding = 0);
-RES(RWBuffer(float), gOutput, UPDATE_FREQ_NONE, u0, binding = 1);
+RES(RWBuffer(float), gOutputBuffer, UPDATE_FREQ_NONE, u0, binding = 1);
 
 STRUCT(DistanceFieldParams) {
     DATA(uint, width, None);     
@@ -96,7 +96,7 @@ void CS_MAIN(SV_DispatchThreadID(uint2) tid)
     float sign = value >= 0.5 ? -1.0 : 1.0;
     
     // Write final signed distance
-    gOutput[index] = sign * distance;
+    gOutputBuffer[index] = sign * distance;
 
     RETURN();
 }

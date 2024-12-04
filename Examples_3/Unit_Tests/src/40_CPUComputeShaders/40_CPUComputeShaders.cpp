@@ -16,10 +16,14 @@
 #include "../../../../Common_3/Utilities/RingBuffer.h"
 
 #include "ISPC/test.comp.h"
+#include "ISPC/distfield.comp.h"
+// NOTE(joesweeney): Right now these share the same namespace and define global variables to match shader semantics
+// within the ISPC code. This means they can't have any name collisions for resources and for their entry function name.
+// This is handled in the generator, but something to keep in mind when adding new shaders here if you get linker errors.
 
 // Test parameters 
-static const uint32_t COMPUTE_TEST_WIDTH = 4096;
-static const uint32_t COMPUTE_TEST_HEIGHT = 4096;
+static const uint32_t COMPUTE_TEST_WIDTH = 1024;
+static const uint32_t COMPUTE_TEST_HEIGHT = 1024;
 
 struct ComputeTestData {
     uint32_t width;
@@ -101,6 +105,53 @@ public:
         ComputeTestData* data = (ComputeTestData*)pUniformBuffer->pCpuMappedAddress;
         data->width = COMPUTE_TEST_WIDTH;
         data->height = COMPUTE_TEST_HEIGHT;
+    
+        BufferLoadDesc distfieldInputDesc = {};
+        distfieldInputDesc.mDesc.mDescriptors = DESCRIPTOR_TYPE_BUFFER;
+        distfieldInputDesc.mDesc.mMemoryUsage = RESOURCE_MEMORY_USAGE_CPU_TO_GPU;
+        distfieldInputDesc.mDesc.mSize = sizeof(float) * numElements;
+        distfieldInputDesc.mDesc.mFlags = BUFFER_CREATION_FLAG_PERSISTENT_MAP_BIT;
+        distfieldInputDesc.mDesc.mElementCount = numElements;
+        distfieldInputDesc.mDesc.mStructStride = sizeof(float);
+        distfieldInputDesc.ppBuffer = &pDistfieldBufferInput;
+        
+        // Initialize input data
+        float* inputData = (float*)tf_malloc(sizeof(float) * numElements);
+        initializeDistanceFieldInput(inputData, COMPUTE_TEST_WIDTH, COMPUTE_TEST_HEIGHT);
+        
+        // Create and upload to input buffer
+        distfieldInputDesc.pData = inputData;
+        addResource(&distfieldInputDesc, &token);
+        
+        tf_free(inputData);
+
+        // Create output buffer
+        BufferLoadDesc distfieldOutputDesc = {};
+        distfieldOutputDesc.ppBuffer = &pDistfieldBufferOutput;
+        distfieldOutputDesc.mDesc.mDescriptors = DESCRIPTOR_TYPE_BUFFER | DESCRIPTOR_TYPE_RW_BUFFER;
+        distfieldOutputDesc.mDesc.mMemoryUsage = RESOURCE_MEMORY_USAGE_GPU_TO_CPU;
+        distfieldOutputDesc.mDesc.mFlags = BUFFER_CREATION_FLAG_PERSISTENT_MAP_BIT;
+        distfieldOutputDesc.mDesc.mSize = sizeof(float) * numElements;
+        distfieldOutputDesc.mDesc.mElementCount = numElements;
+        distfieldOutputDesc.mDesc.mStructStride = sizeof(float);
+        addResource(&distfieldOutputDesc, &token);
+
+        BufferLoadDesc paramsDesc = {};
+        paramsDesc.mDesc.mDescriptors = DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        paramsDesc.mDesc.mMemoryUsage = RESOURCE_MEMORY_USAGE_CPU_TO_GPU;
+        paramsDesc.mDesc.mSize = sizeof(ispc::DistanceFieldParams);
+        paramsDesc.mDesc.mFlags = BUFFER_CREATION_FLAG_PERSISTENT_MAP_BIT;
+        paramsDesc.ppBuffer = &pDistfieldBufferParams;
+        
+        ispc::DistanceFieldParams params = {
+            .width = COMPUTE_TEST_WIDTH,
+            .height = COMPUTE_TEST_HEIGHT,
+            .maxDistance = 100.0f,
+            .padding = 0.0f
+        };
+        
+        paramsDesc.pData = &params;
+        addResource(&paramsDesc, &token);
 
         initSemaphore(pRenderer, &pImageAcquiredSemaphore);
 
@@ -132,6 +183,9 @@ public:
 
         removeResource(pOutputBuffer);
         removeResource(pUniformBuffer);
+        removeResource(pDistfieldBufferInput);
+        removeResource(pDistfieldBufferOutput);
+        removeResource(pDistfieldBufferParams);
 
         exitProfiler();
         exitUserInterface();
@@ -156,6 +210,7 @@ public:
         createPipeline();
         updateDescriptors();
         loadProfilerUI(mSettings.mWidth, mSettings.mHeight);
+        toggleProfilerUI(true);
 
         UIComponentDesc guiDesc = {};
         guiDesc.mStartPosition = vec2(mSettings.mWidth * 0.01f, mSettings.mHeight * 0.2f);
@@ -192,6 +247,10 @@ public:
         removeDescriptorSet(pRenderer, pDescriptorSet);
         removeRootSignature(pRenderer, pRootSignature);
         removeShader(pRenderer, pComputeShader);
+        removeShader(pRenderer, pDistFieldShader);
+        removeRootSignature(pRenderer, pDistFieldRootSignature);
+        removeDescriptorSet(pRenderer, pDistFieldDescriptorSet);
+        removePipeline(pRenderer, pDistFieldPipeline);
 
         if (pReloadDesc->mType & (RELOAD_TYPE_RESIZE | RELOAD_TYPE_RENDERTARGET))
         {
@@ -228,6 +287,8 @@ public:
 
         runComputeTest();
         runCPUComputeTest();
+        runDistanceFieldTest();
+        runCPUDistanceFieldTest();
     }
 
     void Draw() override
@@ -312,6 +373,9 @@ private:
         ShaderLoadDesc computeShader = {};
         computeShader.mComp.pFileName = "test.comp";
         addShader(pRenderer, &computeShader, &pComputeShader);
+        ShaderLoadDesc distFieldShader = {};
+        distFieldShader.mComp.pFileName = "distfield.comp";
+        addShader(pRenderer, &distFieldShader, &pDistFieldShader);
     }
 
     void createRootSignature()
@@ -320,12 +384,19 @@ private:
         rootDesc.mShaderCount = 1;
         rootDesc.ppShaders = &pComputeShader;
         addRootSignature(pRenderer, &rootDesc, &pRootSignature);
+        RootSignatureDesc distFieldRootDesc = {};
+        distFieldRootDesc.mShaderCount = 1;
+        distFieldRootDesc.ppShaders = &pDistFieldShader;
+        addRootSignature(pRenderer, &distFieldRootDesc, &pDistFieldRootSignature);
     }
 
     void createDescriptorSet()
     {
         DescriptorSetDesc setDesc = { pRootSignature, DESCRIPTOR_UPDATE_FREQ_NONE, 1 };
         addDescriptorSet(pRenderer, &setDesc, &pDescriptorSet);
+
+        DescriptorSetDesc distFieldSetDesc = { pDistFieldRootSignature, DESCRIPTOR_UPDATE_FREQ_NONE, 1 };
+        addDescriptorSet(pRenderer, &distFieldSetDesc, &pDistFieldDescriptorSet);
     }
 
     void createPipeline()
@@ -336,6 +407,13 @@ private:
         computeDesc.pRootSignature = pRootSignature;
         computeDesc.pShaderProgram = pComputeShader;
         addPipeline(pRenderer, &desc, &pComputePipeline);
+
+        PipelineDesc distFieldDesc = {};
+        distFieldDesc.mType = PIPELINE_TYPE_COMPUTE;
+        ComputePipelineDesc& distFieldComputeDesc = distFieldDesc.mComputeDesc;
+        distFieldComputeDesc.pRootSignature = pDistFieldRootSignature;
+        distFieldComputeDesc.pShaderProgram = pDistFieldShader;
+        addPipeline(pRenderer, &distFieldDesc, &pDistFieldPipeline);
     }
 
     void updateDescriptors()
@@ -346,11 +424,19 @@ private:
         params[1].pName = "gSettings";  
         params[1].ppBuffers = &pUniformBuffer;
         updateDescriptorSet(pRenderer, 0, pDescriptorSet, 2, params);
+        DescriptorData distfieldParams[3] = {};
+        distfieldParams[0].pName = "gInputBuffer";
+        distfieldParams[0].ppBuffers = &pDistfieldBufferInput;
+        distfieldParams[1].pName = "gOutputBuffer";
+        distfieldParams[1].ppBuffers = &pDistfieldBufferOutput;
+        distfieldParams[2].pName = "gParams";
+        distfieldParams[2].ppBuffers = &pDistfieldBufferParams;
+        updateDescriptorSet(pRenderer, 0, pDistFieldDescriptorSet, 3, distfieldParams);
     }
     
     void runComputeTest()
     {
-        PROFILER_SET_CPU_SCOPE("Tests", "GPU", 0x222222);
+        PROFILER_SET_CPU_SCOPE("Tests", "GPU Basic", 0x222222);
         resetCmdPool(pRenderer, pCmdPool);
         beginCmd(pCmd);
 
@@ -381,9 +467,37 @@ private:
         }
     }
 
+    void runDistanceFieldTest()
+    {
+        PROFILER_SET_CPU_SCOPE("Tests", "GPU Distance Field ", 0x222222);
+        
+        uint32_t groupSizeX = (COMPUTE_TEST_WIDTH + 15) / 16;
+        uint32_t groupSizeY = (COMPUTE_TEST_HEIGHT + 15) / 16;
+
+        beginCmd(pCmd);
+        
+        cmdBindPipeline(pCmd, pDistFieldPipeline);
+        cmdBindDescriptorSet(pCmd, 0, pDistFieldDescriptorSet);
+        cmdDispatch(pCmd, groupSizeX, groupSizeY, 1);
+        
+        endCmd(pCmd);
+        QueueSubmitDesc submitDesc = {};
+        submitDesc.mCmdCount = 1;
+        submitDesc.ppCmds = &pCmd;
+        submitDesc.mSubmitDone = true;
+        queueSubmit(pQueue, &submitDesc);
+        waitQueueIdle(pQueue);
+
+        float* outputData = (float*)pDistfieldBufferOutput->pCpuMappedAddress;
+        LOGF(LogLevel::eINFO, "Compute Test Results:");
+        for (uint32_t i = 0; i < 10 && i < COMPUTE_TEST_WIDTH * COMPUTE_TEST_HEIGHT; i++) {
+            LOGF(LogLevel::eINFO, "Output[%u] = %f", i, outputData[i]);
+        }
+    }
+
     void runCPUComputeTest()
     {
-        PROFILER_SET_CPU_SCOPE("Tests", "CPU", 0x222222);
+        PROFILER_SET_CPU_SCOPE("Tests", "CPU Basic", 0x222222);
         uint32_t groupSizeX = (COMPUTE_TEST_WIDTH + 15) / 16;  // Assuming 16x16 thread groups
         uint32_t groupSizeY = (COMPUTE_TEST_HEIGHT + 15) / 16;
         const uint32_t numElements = COMPUTE_TEST_WIDTH * COMPUTE_TEST_HEIGHT;
@@ -396,7 +510,7 @@ private:
         // settings.width = COMPUTE_TEST_WIDTH;
         // settings.height = COMPUTE_TEST_HEIGHT;
 
-        ispc::CS_MAIN(outputBuffer, settings, groupSizeX, groupSizeY, 1);
+        ispc::CS_MAIN_TEST(outputBuffer, settings, groupSizeX, groupSizeY, 1);
         
 
         LOGF(LogLevel::eINFO, "CPU Compute Test Results:");
@@ -405,6 +519,65 @@ private:
         }
         free(outputBuffer);
     }
+
+    void initializeDistanceFieldInput(float* inputBuffer, uint32_t width, uint32_t height) 
+    {
+        // Fill with white background (1.0)
+        for (uint32_t i = 0; i < width * height; i++) 
+        {
+            inputBuffer[i] = 1.0f;
+        }
+
+        // Create a simple black (0.0) rectangle to simulate text
+        uint32_t rectX = width / 4;
+        uint32_t rectY = height / 4;
+        uint32_t rectWidth = width / 2;
+        uint32_t rectHeight = height / 2;
+
+        for (uint32_t y = rectY; y < rectY + rectHeight; y++) 
+        {
+            for (uint32_t x = rectX; x < rectX + rectWidth; x++) 
+            {
+                inputBuffer[y * width + x] = 0.0f;  // Black "text"
+            }
+        }
+    }
+
+    void runCPUDistanceFieldTest()
+    {
+        PROFILER_SET_CPU_SCOPE("Tests", "CPU Distance Field", 0x222222);
+        
+        uint32_t groupSizeX = (COMPUTE_TEST_WIDTH + 15) / 16;
+        uint32_t groupSizeY = (COMPUTE_TEST_HEIGHT + 15) / 16;
+        const uint32_t numElements = COMPUTE_TEST_WIDTH * COMPUTE_TEST_HEIGHT;
+        
+        float* inputBuffer = (float*)malloc(sizeof(float) * numElements);
+        float* outputBuffer = (float*)malloc(sizeof(float) * numElements);
+        
+        // Initialize input buffer with a test pattern
+        initializeDistanceFieldInput(inputBuffer, COMPUTE_TEST_WIDTH, COMPUTE_TEST_HEIGHT);
+        
+        ispc::DistanceFieldParams params = {
+            .width = COMPUTE_TEST_WIDTH,
+            .height = COMPUTE_TEST_HEIGHT,
+            .maxDistance = 100.0f,
+            .padding = 0.0f
+        };
+
+        ispc::CS_MAIN_DISTFIELD(inputBuffer, outputBuffer, params, groupSizeX, groupSizeY, 1);
+        
+        // Print some results to verify
+        LOGF(LogLevel::eINFO, "Distance Field Test Results:");
+        for (uint32_t i = 0; i < 10 && i < COMPUTE_TEST_WIDTH * COMPUTE_TEST_HEIGHT; i++) {
+            LOGF(LogLevel::eINFO, "Input[%u] = %f, Output[%u] = %f", 
+                i, inputBuffer[i], i, outputBuffer[i]);
+        }
+        
+        free(inputBuffer);
+        free(outputBuffer);
+    }
+
+
 
     bool addSwapChain()
     {
@@ -434,10 +607,17 @@ private:
     SwapChain* pSwapChain = NULL;
     Buffer* pOutputBuffer = NULL;
     Buffer* pUniformBuffer = NULL;
+    Buffer* pDistfieldBufferInput;
+    Buffer* pDistfieldBufferOutput;
+    Buffer* pDistfieldBufferParams;
     Shader* pComputeShader = NULL;
+    Shader* pDistFieldShader = NULL;
     RootSignature* pRootSignature = NULL;
+    RootSignature* pDistFieldRootSignature = NULL;
     DescriptorSet* pDescriptorSet = NULL;
+    DescriptorSet* pDistFieldDescriptorSet = NULL;
     Pipeline* pComputePipeline = NULL;
+    Pipeline* pDistFieldPipeline = NULL;
     Semaphore* pImageAcquiredSemaphore = NULL;
     UIComponent* pGuiWindow = NULL;
 };
