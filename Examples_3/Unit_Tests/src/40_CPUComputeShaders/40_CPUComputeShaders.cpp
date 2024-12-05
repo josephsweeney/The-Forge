@@ -22,8 +22,8 @@
 // This is handled in the generator, but something to keep in mind when adding new shaders here if you get linker errors.
 
 // Test parameters 
-static const uint32_t COMPUTE_TEST_WIDTH = 1024;
-static const uint32_t COMPUTE_TEST_HEIGHT = 1024;
+static const uint32_t COMPUTE_TEST_WIDTH = 512;
+static const uint32_t COMPUTE_TEST_HEIGHT = 512;
 
 struct ComputeTestData {
     uint32_t width;
@@ -34,6 +34,7 @@ ProfileToken gCpuComputeToken;
 ProfileToken gGpuComputeToken;
 
 uint32_t gFontID = 0;
+uint64_t gTestCounter = 0;
 
 class CPUComputeTest: public IApp 
 {
@@ -114,16 +115,10 @@ public:
         distfieldInputDesc.mDesc.mElementCount = numElements;
         distfieldInputDesc.mDesc.mStructStride = sizeof(float);
         distfieldInputDesc.ppBuffer = &pDistfieldBufferInput;
-        
-        // Initialize input data
-        float* inputData = (float*)tf_malloc(sizeof(float) * numElements);
-        initializeDistanceFieldInput(inputData, COMPUTE_TEST_WIDTH, COMPUTE_TEST_HEIGHT);
-        
-        // Create and upload to input buffer
-        distfieldInputDesc.pData = inputData;
+        pDistfieldGpuInputBuffer = (float*)malloc(sizeof(float) * numElements);
+        initializeDistanceFieldInput(pDistfieldGpuInputBuffer, COMPUTE_TEST_WIDTH, COMPUTE_TEST_HEIGHT);
+        distfieldInputDesc.pData = pDistfieldGpuInputBuffer;
         addResource(&distfieldInputDesc, &token);
-        
-        tf_free(inputData);
 
         // Create output buffer
         BufferLoadDesc distfieldOutputDesc = {};
@@ -135,6 +130,16 @@ public:
         distfieldOutputDesc.mDesc.mElementCount = numElements;
         distfieldOutputDesc.mDesc.mStructStride = sizeof(float);
         addResource(&distfieldOutputDesc, &token);
+
+        BufferLoadDesc distfieldBoundaryDesc = {};
+        distfieldBoundaryDesc.ppBuffer = &pDistfieldBufferBoundary;
+        distfieldBoundaryDesc.mDesc.mDescriptors = DESCRIPTOR_TYPE_BUFFER | DESCRIPTOR_TYPE_RW_BUFFER;
+        distfieldBoundaryDesc.mDesc.mMemoryUsage = RESOURCE_MEMORY_USAGE_GPU_TO_CPU;
+        distfieldBoundaryDesc.mDesc.mFlags = BUFFER_CREATION_FLAG_PERSISTENT_MAP_BIT;
+        distfieldBoundaryDesc.mDesc.mSize = sizeof(uint32_t) * numElements;
+        distfieldBoundaryDesc.mDesc.mElementCount = numElements;
+        distfieldBoundaryDesc.mDesc.mStructStride = sizeof(uint32_t);
+        addResource(&distfieldBoundaryDesc, &token);
 
         BufferLoadDesc paramsDesc = {};
         paramsDesc.mDesc.mDescriptors = DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -157,8 +162,9 @@ public:
 
         pBasicOutputBuffer = (float*)malloc(sizeof(float) * numElements);
         pDistfieldCpuInputBuffer = (float*)malloc(sizeof(float) * numElements);
-        pDistfieldCpuOutputBuffer = (float*)malloc(sizeof(float) * numElements);
         initializeDistanceFieldInput(pDistfieldCpuInputBuffer, COMPUTE_TEST_WIDTH, COMPUTE_TEST_HEIGHT);
+        pDistfieldCpuOutputBuffer = (float*)malloc(sizeof(float) * numElements);
+        pDistfieldCpuBoundaryBuffer = (uint32_t*)malloc(sizeof(uint32_t) * numElements);
 
         initTestTextures(&token);
 
@@ -193,9 +199,12 @@ public:
         removeResource(pDistfieldBufferInput);
         removeResource(pDistfieldBufferOutput);
         removeResource(pDistfieldBufferParams);
+        removeResource(pDistfieldBufferBoundary);
         free(pBasicOutputBuffer);
+        free(pDistfieldGpuInputBuffer);
         free(pDistfieldCpuInputBuffer);
         free(pDistfieldCpuOutputBuffer);
+        free(pDistfieldCpuBoundaryBuffer);
         exitTestTextures();
 
         exitProfiler();
@@ -304,20 +313,27 @@ public:
             }
         }
 
-        runComputeTest();
-        runCPUComputeTest();
-        checkBasicTestOutputs();
-        runDistanceFieldTest();
-        runCPUDistanceFieldTest();
+        if (gTestCounter++ % 600 == 0)
+        {
+            runComputeTest();
+            runCPUComputeTest();
+            checkBasicTestOutputs();
+            runDistanceFieldTest();
+            runCPUDistanceFieldTest();
 
-        loadTextureFromFloatBuffer(pBasicCpuOutput, pBasicOutputBuffer);
-        loadTextureFromFloatBuffer(pBasicGpuOutput, (float*)pOutputBuffer->pCpuMappedAddress);
+            loadTextureFromFloatBuffer(pBasicCpuOutput, pBasicOutputBuffer);
+            loadTextureFromFloatBuffer(pBasicGpuOutput, (float*)pOutputBuffer->pCpuMappedAddress);
+            loadTextureFromFloatBuffer(pDistfieldCpuInput, pDistfieldCpuInputBuffer);
+            loadTextureFromFloatBuffer(pDistfieldGpuInput, (float*)pDistfieldBufferInput->pCpuMappedAddress);
+            // dumpBenchmarkData(&mSettings);
+        }
+        
     }
 
     void SetupDebugWindow()
     {
-        float  scale = 0.75f;
-        float2 screenSize = { (float)mSettings.mWidth, (float)mSettings.mHeight };
+        float  scale = 0.5f;
+        float2 screenSize = { (float)COMPUTE_TEST_WIDTH, (float)COMPUTE_TEST_HEIGHT };
         float2 texSize = screenSize * scale;
 
         if (!pDebugWindow)
@@ -334,9 +350,19 @@ public:
             widget.mTexturesCount = 1;
             widget.mTextureDisplaySize = texSize;
             uiAddComponentWidget(pDebugWindow, "CPU Basic Output", &widget, WIDGET_TYPE_DEBUG_TEXTURES);
+            VerticalSeparatorWidget verticalSeperator = { 1 };
+            uiAddComponentWidget(pDebugWindow, "Vertical separator", &verticalSeperator, WIDGET_TYPE_VERTICAL_SEPARATOR);
             uiAddComponentWidget(pDebugWindow, "GPU Basic Output", &label, WIDGET_TYPE_LABEL);
             widget.pTextures = &pBasicGpuOutput;
-            uiAddComponentWidget(pDebugWindow, "GPU Basic Output", &widget, WIDGET_TYPE_DEBUG_TEXTURES);
+            uiAddComponentWidget(pDebugWindow, "GPU Basic Input", &widget, WIDGET_TYPE_DEBUG_TEXTURES);
+            uiAddComponentWidget(pDebugWindow, "Vertical separator", &verticalSeperator, WIDGET_TYPE_VERTICAL_SEPARATOR);
+            uiAddComponentWidget(pDebugWindow, "CPU Distfield Input", &label, WIDGET_TYPE_LABEL);
+            widget.pTextures = &pDistfieldCpuInput;
+            uiAddComponentWidget(pDebugWindow, "CPU Distfield Input", &widget, WIDGET_TYPE_DEBUG_TEXTURES);
+            uiAddComponentWidget(pDebugWindow, "Vertical separator", &verticalSeperator, WIDGET_TYPE_VERTICAL_SEPARATOR);
+            uiAddComponentWidget(pDebugWindow, "GPU Distfield Input", &label, WIDGET_TYPE_LABEL);
+            widget.pTextures = &pDistfieldGpuInput;
+            uiAddComponentWidget(pDebugWindow, "GPU Distfield Input", &widget, WIDGET_TYPE_DEBUG_TEXTURES);
 
             uiSetComponentActive(pDebugWindow, true);
         }
@@ -475,14 +501,16 @@ private:
         params[1].pName = "gSettings";  
         params[1].ppBuffers = &pUniformBuffer;
         updateDescriptorSet(pRenderer, 0, pDescriptorSet, 2, params);
-        DescriptorData distfieldParams[3] = {};
+        DescriptorData distfieldParams[4] = {};
         distfieldParams[0].pName = "gInputBuffer";
         distfieldParams[0].ppBuffers = &pDistfieldBufferInput;
         distfieldParams[1].pName = "gOutputBuffer";
         distfieldParams[1].ppBuffers = &pDistfieldBufferOutput;
-        distfieldParams[2].pName = "gParams";
-        distfieldParams[2].ppBuffers = &pDistfieldBufferParams;
-        updateDescriptorSet(pRenderer, 0, pDistFieldDescriptorSet, 3, distfieldParams);
+        distfieldParams[2].pName = "gBoundaryBuffer";
+        distfieldParams[2].ppBuffers = &pDistfieldBufferBoundary;
+        distfieldParams[3].pName = "gParams";
+        distfieldParams[3].ppBuffers = &pDistfieldBufferParams;
+        updateDescriptorSet(pRenderer, 0, pDistFieldDescriptorSet, 4, distfieldParams);
     }
 
     void initTestTextures(SyncToken* token)
@@ -506,12 +534,23 @@ private:
         basicGpuDesc.pDesc = &texDesc;
         addResource(&basicGpuDesc, token);
 
+
+        TextureLoadDesc distfieldCpuDesc = {};
+        distfieldCpuDesc.ppTexture = &pDistfieldCpuInput;
+        distfieldCpuDesc.pDesc = &texDesc;
+        addResource(&distfieldCpuDesc, token);
+        TextureLoadDesc distfieldGpuDesc = {};
+        distfieldGpuDesc.ppTexture = &pDistfieldGpuInput;
+        distfieldGpuDesc.pDesc = &texDesc;
+        addResource(&distfieldGpuDesc, token);
     }
 
     void exitTestTextures()
     {
         removeResource(pBasicCpuOutput);
         removeResource(pBasicGpuOutput);
+        removeResource(pDistfieldCpuInput);
+        removeResource(pDistfieldGpuInput);
     }
 
     void loadTextureFromFloatBuffer(Texture* pTexture, float* pBuffer) 
@@ -548,8 +587,8 @@ private:
         cmdBindPipeline(pCmd, pComputePipeline);
         cmdBindDescriptorSet(pCmd, 0, pDescriptorSet);
 
-        uint32_t groupSizeX = (COMPUTE_TEST_WIDTH + 15) / 16;  // Assuming 16x16 thread groups
-        uint32_t groupSizeY = (COMPUTE_TEST_HEIGHT + 15) / 16;
+        uint32_t groupSizeX = (COMPUTE_TEST_WIDTH + 7) / 8;
+        uint32_t groupSizeY = (COMPUTE_TEST_HEIGHT + 7) / 8;
         cmdDispatch(pCmd, groupSizeX, groupSizeY, 1);
 
         endCmd(pCmd);
@@ -576,14 +615,14 @@ private:
     {
         PROFILER_SET_CPU_SCOPE("Tests", "GPU Distance Field ", 0x222222);
         
-        uint32_t groupSizeX = (COMPUTE_TEST_WIDTH + 15) / 16;
-        uint32_t groupSizeY = (COMPUTE_TEST_HEIGHT + 15) / 16;
+        // uint32_t groupSizeX = (COMPUTE_TEST_WIDTH + 15) / 16;
+        // uint32_t groupSizeY = (COMPUTE_TEST_HEIGHT + 15) / 16;
 
         beginCmd(pCmd);
         
         cmdBindPipeline(pCmd, pDistFieldPipeline);
         cmdBindDescriptorSet(pCmd, 0, pDistFieldDescriptorSet);
-        cmdDispatch(pCmd, groupSizeX, groupSizeY, 1);
+        cmdDispatch(pCmd, COMPUTE_TEST_WIDTH, COMPUTE_TEST_HEIGHT, 1);
         
         endCmd(pCmd);
         QueueSubmitDesc submitDesc = {};
@@ -603,13 +642,11 @@ private:
     void runCPUComputeTest()
     {
         PROFILER_SET_CPU_SCOPE("Tests", "CPU Basic", 0x222222);
-        uint32_t groupSizeX = (COMPUTE_TEST_WIDTH + 15) / 16;  // Assuming 16x16 thread groups
-        uint32_t groupSizeY = (COMPUTE_TEST_HEIGHT + 15) / 16;
         const ispc::ComputeTestData settings = { 
             .width = COMPUTE_TEST_WIDTH,
             .height = COMPUTE_TEST_HEIGHT
         };
-        ispc::CS_MAIN_TEST(pBasicOutputBuffer, settings, groupSizeX, groupSizeY, 1);
+        ispc::CS_MAIN_TEST(pBasicOutputBuffer, settings, COMPUTE_TEST_WIDTH, COMPUTE_TEST_HEIGHT, 1);
         // LOGF(LogLevel::eINFO, "CPU Compute Test Results:");
         // for (uint32_t i = 0; i < 10 && i < COMPUTE_TEST_WIDTH * COMPUTE_TEST_HEIGHT; i++) {
         //     LOGF(LogLevel::eINFO, "CPU Output[%u] = %f", i, pBasicOutputBuffer[i]);
@@ -621,14 +658,11 @@ private:
         float* gpuOutputData = (float*)pOutputBuffer->pCpuMappedAddress;
         LOGF(LogLevel::eINFO, "Check Basic Compute Test Results:");
         for (uint32_t i = 0; i < COMPUTE_TEST_WIDTH * COMPUTE_TEST_HEIGHT; ++i) {
-			// LOGF(LogLevel::eINFO, "CPU[%d] = %f", i, pBasicOutputBuffer[i]);
-			// LOGF(LogLevel::eINFO, "GPU[%d] = %f", i, gpuOutputData[i]);
             if (pBasicOutputBuffer[i] != gpuOutputData[i]) {
 
                 LOGF(LogLevel::eERROR, "MISMATCH AT [%d] = CPU:%f|GPU:%f", i, pBasicOutputBuffer[i], gpuOutputData[i]);
-                return;
             }
-            // ASSERT(pBasicOutputBuffer[i] == gpuOutputData[i]);
+            ASSERT(pBasicOutputBuffer[i] == gpuOutputData[i]);
         }
         LOGF(LogLevel::eINFO, "Basic Compute Test: PASSED");
     }
@@ -660,9 +694,6 @@ private:
     {
         PROFILER_SET_CPU_SCOPE("Tests", "CPU Distance Field", 0x222222);
         
-        uint32_t groupSizeX = (COMPUTE_TEST_WIDTH + 15) / 16;
-        uint32_t groupSizeY = (COMPUTE_TEST_HEIGHT + 15) / 16;
-        
         ispc::DistanceFieldParams params = {
             .width = COMPUTE_TEST_WIDTH,
             .height = COMPUTE_TEST_HEIGHT,
@@ -670,7 +701,7 @@ private:
             .padding = 0.0f
         };
 
-        ispc::CS_MAIN_DISTFIELD(pDistfieldCpuInputBuffer, pDistfieldCpuOutputBuffer, params, groupSizeX, groupSizeY, 1);
+        ispc::CS_MAIN_DISTFIELD(pDistfieldCpuInputBuffer, pDistfieldCpuOutputBuffer, pDistfieldCpuBoundaryBuffer, params, COMPUTE_TEST_WIDTH, COMPUTE_TEST_HEIGHT, 1);
         
         // Print some results to verify
         LOGF(LogLevel::eINFO, "Distance Field Test Results:");
@@ -713,6 +744,7 @@ private:
     Buffer* pDistfieldBufferInput = NULL;
     Buffer* pDistfieldBufferOutput = NULL;
     Buffer* pDistfieldBufferParams = NULL;
+    Buffer* pDistfieldBufferBoundary = NULL;
     Shader* pComputeShader = NULL;
     Shader* pDistFieldShader = NULL;
     RootSignature* pRootSignature = NULL;
@@ -728,11 +760,13 @@ private:
     float *pBasicOutputBuffer = NULL;
     float* pDistfieldCpuInputBuffer = NULL;
     float* pDistfieldCpuOutputBuffer = NULL;
+    float* pDistfieldGpuInputBuffer = NULL;
+    uint32_t* pDistfieldCpuBoundaryBuffer = NULL;
     
     Texture* pBasicCpuOutput = NULL;
     Texture* pBasicGpuOutput = NULL;
-    // Texture* pDistfieldCpuInput = NULL;
-    // Texture* pDistfieldGpuInput = NULL;
+    Texture* pDistfieldCpuInput = NULL;
+    Texture* pDistfieldGpuInput = NULL;
     // Texture* pDistfieldCpuOutput = NULL;
     // Texture* pDistfieldGpuOutput = NULL;
 };

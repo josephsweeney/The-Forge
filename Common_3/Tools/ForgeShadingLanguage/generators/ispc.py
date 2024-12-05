@@ -30,12 +30,7 @@ import os, re
 
 MAIN_WRAPPER_FSTRING = """export void {}({}uniform int dispatch_x, uniform int dispatch_y, uniform int dispatch_z) {{
     {}
-    uniform int total_invocations = dispatch_x * dispatch_y * dispatch_z;
-    foreach (invocation = 0 ... total_invocations) {{
-        // Calculate coordinates from invocation index
-        int x = invocation % dispatch_x;
-        int y = (invocation / dispatch_x) % dispatch_y;
-        int z = invocation / (dispatch_x * dispatch_y);
+    foreach_tiled (z = 0 ... dispatch_z, y = 0 ... dispatch_y, x = 0 ... dispatch_x) {{
         {}
         {}_impl({});
     }}

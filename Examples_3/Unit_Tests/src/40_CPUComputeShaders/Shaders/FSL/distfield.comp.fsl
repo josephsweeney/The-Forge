@@ -3,6 +3,7 @@
 
 RES(Buffer(float), gInputBuffer, UPDATE_FREQ_NONE, t0, binding = 0);
 RES(RWBuffer(float), gOutputBuffer, UPDATE_FREQ_NONE, u0, binding = 1);
+RES(RWBuffer(uint), gBoundaryBuffer, UPDATE_FREQ_NONE, u1, binding = 2);
 
 STRUCT(DistanceFieldParams) {
     DATA(uint, width, None);     
@@ -12,14 +13,15 @@ STRUCT(DistanceFieldParams) {
 };
 RES(CBUFFER(DistanceFieldParams), gParams, UPDATE_FREQ_NONE, b0, binding = 2);
 
-// Check if a pixel location contains a surface boundary 
-bool IsSurfaceBoundary(uint2 pos)
+bool IsSurfaceBoundary(uint2 pos, uint index)
 {
-    uint index = pos.y * gParams.width + pos.x;
     float center = gInputBuffer[index];
     
     if (abs(center - 0.5) > 0.5)
+    {
+        gBoundaryBuffer[index] = 0;
         return false;
+    }
         
     for (int dy = -1; dy <= 1; dy++)
     {
@@ -36,10 +38,14 @@ bool IsSurfaceBoundary(uint2 pos)
             float neighbor = gInputBuffer[nindex];
             
             if ((center < 0.5 && neighbor >= 0.5) || (center >= 0.5 && neighbor < 0.5))
+            {
+                gBoundaryBuffer[index] = 1;
                 return true;
+            }
         }
     }
     
+    gBoundaryBuffer[index] = 0;
     return false;
 }
 
@@ -50,7 +56,6 @@ float ComputePointDistance(float2 p1, float2 p2)
     return length(diff);
 }
 
-// Find distance to nearest boundary within search radius
 float FindNearestBoundaryDistance(uint2 pos, int searchRadius)
 {
     float2 pixelPos = float2(pos);
@@ -65,10 +70,12 @@ float FindNearestBoundaryDistance(uint2 pos, int searchRadius)
     {
         for (int x = xStart; x < xEnd; x++)
         {
-            uint2 testPos = uint2(x, y);
-            if (IsSurfaceBoundary(testPos))
+            uint testIndex = y * gParams.width + x;
+            // Use boundary buffer instead of recomputing
+            if (gBoundaryBuffer[testIndex] != 0)
             {
-                float dist = ComputePointDistance(pixelPos, float2(testPos));
+                float2 testPos = float2(x, y);
+                float dist = length(testPos - pixelPos);
                 minDist = min(minDist, dist);
             }
         }
@@ -87,15 +94,17 @@ void CS_MAIN(SV_DispatchThreadID(uint2) tid)
         RETURN();
     }
 
-    // Compute distance to nearest boundary
-    float distance = FindNearestBoundaryDistance(tid, 16); // Search radius of 16 pixels
-    
-    // Determine sign based on input value
     uint index = tid.y * gParams.width + tid.x;
+    
+    // First check and store boundary status
+    IsSurfaceBoundary(tid, index);
+    
+    // Now compute distance using boundary buffer
+    float distance = FindNearestBoundaryDistance(tid, 16);
+    
     float value = gInputBuffer[index];
     float sign = value >= 0.5 ? -1.0 : 1.0;
     
-    // Write final signed distance
     gOutputBuffer[index] = sign * distance;
 
     RETURN();
