@@ -155,6 +155,13 @@ public:
 
         initSemaphore(pRenderer, &pImageAcquiredSemaphore);
 
+        pBasicOutputBuffer = (float*)malloc(sizeof(float) * numElements);
+        pDistfieldCpuInputBuffer = (float*)malloc(sizeof(float) * numElements);
+        pDistfieldCpuOutputBuffer = (float*)malloc(sizeof(float) * numElements);
+        initializeDistanceFieldInput(pDistfieldCpuInputBuffer, COMPUTE_TEST_WIDTH, COMPUTE_TEST_HEIGHT);
+
+        initTestTextures(&token);
+
         // Load fonts
         FontDesc font = {};
         font.pFontPath = "TitilliumText/TitilliumText-Bold.otf";
@@ -186,6 +193,10 @@ public:
         removeResource(pDistfieldBufferInput);
         removeResource(pDistfieldBufferOutput);
         removeResource(pDistfieldBufferParams);
+        free(pBasicOutputBuffer);
+        free(pDistfieldCpuInputBuffer);
+        free(pDistfieldCpuOutputBuffer);
+        exitTestTextures();
 
         exitProfiler();
         exitUserInterface();
@@ -213,7 +224,7 @@ public:
         toggleProfilerUI(true);
 
         UIComponentDesc guiDesc = {};
-        guiDesc.mStartPosition = vec2(mSettings.mWidth * 0.01f, mSettings.mHeight * 0.2f);
+        guiDesc.mStartPosition = vec2(mSettings.mWidth * 0.1f, mSettings.mHeight * 0.2f);
         uiAddComponent(GetName(), &guiDesc, &pGuiWindow);
 
         if (!addSwapChain()) {
@@ -234,6 +245,8 @@ public:
         fontLoad.mLoadType = pReloadDesc->mType;
         loadFontSystem(&fontLoad);
 
+        SetupDebugWindow();
+
         return true;
     }
 
@@ -251,6 +264,12 @@ public:
         removeRootSignature(pRenderer, pDistFieldRootSignature);
         removeDescriptorSet(pRenderer, pDistFieldDescriptorSet);
         removePipeline(pRenderer, pDistFieldPipeline);
+
+        if (pDebugWindow)
+        {
+            uiRemoveComponent(pDebugWindow);
+            pDebugWindow = NULL;
+        }
 
         if (pReloadDesc->mType & (RELOAD_TYPE_RESIZE | RELOAD_TYPE_RENDERTARGET))
         {
@@ -287,8 +306,40 @@ public:
 
         runComputeTest();
         runCPUComputeTest();
+        checkBasicTestOutputs();
         runDistanceFieldTest();
         runCPUDistanceFieldTest();
+
+        loadTextureFromFloatBuffer(pBasicCpuOutput, pBasicOutputBuffer);
+        loadTextureFromFloatBuffer(pBasicGpuOutput, (float*)pOutputBuffer->pCpuMappedAddress);
+    }
+
+    void SetupDebugWindow()
+    {
+        float  scale = 0.75f;
+        float2 screenSize = { (float)mSettings.mWidth, (float)mSettings.mHeight };
+        float2 texSize = screenSize * scale;
+
+        if (!pDebugWindow)
+        {
+            UIComponentDesc UIComponentDesc = {};
+            UIComponentDesc.mStartSize = vec2(UIComponentDesc.mStartSize.getX(), UIComponentDesc.mStartSize.getY());
+            UIComponentDesc.mStartPosition.setY(mSettings.mHeight * 0.1f);
+            uiAddComponent("DEBUG Compute Outputs", &UIComponentDesc, &pDebugWindow);
+
+            LabelWidget label = {};
+            uiAddComponentWidget(pDebugWindow, "CPU Basic Output", &label, WIDGET_TYPE_LABEL);
+            DebugTexturesWidget widget;
+            widget.pTextures = &pBasicCpuOutput;
+            widget.mTexturesCount = 1;
+            widget.mTextureDisplaySize = texSize;
+            uiAddComponentWidget(pDebugWindow, "CPU Basic Output", &widget, WIDGET_TYPE_DEBUG_TEXTURES);
+            uiAddComponentWidget(pDebugWindow, "GPU Basic Output", &label, WIDGET_TYPE_LABEL);
+            widget.pTextures = &pBasicGpuOutput;
+            uiAddComponentWidget(pDebugWindow, "GPU Basic Output", &widget, WIDGET_TYPE_DEBUG_TEXTURES);
+
+            uiSetComponentActive(pDebugWindow, true);
+        }
     }
 
     void Draw() override
@@ -433,6 +484,60 @@ private:
         distfieldParams[2].ppBuffers = &pDistfieldBufferParams;
         updateDescriptorSet(pRenderer, 0, pDistFieldDescriptorSet, 3, distfieldParams);
     }
+
+    void initTestTextures(SyncToken* token)
+    {
+        TextureDesc texDesc = {};
+        texDesc.mWidth = COMPUTE_TEST_WIDTH;
+        texDesc.mHeight = COMPUTE_TEST_HEIGHT;
+        texDesc.mDepth = 1;
+        texDesc.mArraySize = 1;
+        texDesc.mMipLevels = 1;
+        texDesc.mSampleCount = SAMPLE_COUNT_1;
+        texDesc.mFormat = TinyImageFormat_R32_SFLOAT;
+        texDesc.mDescriptors = DESCRIPTOR_TYPE_TEXTURE;
+        texDesc.mStartState = RESOURCE_STATE_SHADER_RESOURCE;
+        TextureLoadDesc basicCpuDesc = {};
+        basicCpuDesc.ppTexture = &pBasicCpuOutput;
+        basicCpuDesc.pDesc = &texDesc;
+        addResource(&basicCpuDesc, token);
+        TextureLoadDesc basicGpuDesc = {};
+        basicGpuDesc.ppTexture = &pBasicGpuOutput;
+        basicGpuDesc.pDesc = &texDesc;
+        addResource(&basicGpuDesc, token);
+
+    }
+
+    void exitTestTextures()
+    {
+        removeResource(pBasicCpuOutput);
+        removeResource(pBasicGpuOutput);
+    }
+
+    void loadTextureFromFloatBuffer(Texture* pTexture, float* pBuffer) 
+    {
+        int width = COMPUTE_TEST_WIDTH;
+        int height = COMPUTE_TEST_HEIGHT;
+        TextureUpdateDesc updateDesc = {};
+        updateDesc.pTexture = pTexture;
+        updateDesc.mBaseMipLevel = 0;
+        updateDesc.mMipLevels = 1;
+        updateDesc.mBaseArrayLayer = 0;
+        updateDesc.mLayerCount = 1;
+
+        beginUpdateResource(&updateDesc);
+        
+        // Get the subresource layout info
+        TextureSubresourceUpdate subresDesc = updateDesc.getSubresourceUpdateDesc(0, 0);
+        
+        for (uint32_t y = 0; y < height; ++y) {
+            uint8_t* dstRow = (uint8_t*)subresDesc.pMappedData + y * subresDesc.mDstRowStride;
+            uint8_t* srcRow = (uint8_t*)pBuffer + y * width * sizeof(float);
+            memcpy(dstRow, srcRow, width * sizeof(float));
+        }
+
+        endUpdateResource(&updateDesc);
+    }
     
     void runComputeTest()
     {
@@ -460,11 +565,11 @@ private:
         waitQueueIdle(pQueue);
 
         // Print results 
-        float* outputData = (float*)pOutputBuffer->pCpuMappedAddress;
-        LOGF(LogLevel::eINFO, "Compute Test Results:");
-        for (uint32_t i = 0; i < 10 && i < COMPUTE_TEST_WIDTH * COMPUTE_TEST_HEIGHT; i++) {
-            LOGF(LogLevel::eINFO, "Output[%u] = %f", i, outputData[i]);
-        }
+        // float* outputData = (float*)pOutputBuffer->pCpuMappedAddress;
+        // LOGF(LogLevel::eINFO, "Compute Test Results:");
+        // for (uint32_t i = 0; i < 10 && i < COMPUTE_TEST_WIDTH * COMPUTE_TEST_HEIGHT; i++) {
+        //     LOGF(LogLevel::eINFO, "Output[%u] = %f", i, outputData[i]);
+        // }
     }
 
     void runDistanceFieldTest()
@@ -500,24 +605,32 @@ private:
         PROFILER_SET_CPU_SCOPE("Tests", "CPU Basic", 0x222222);
         uint32_t groupSizeX = (COMPUTE_TEST_WIDTH + 15) / 16;  // Assuming 16x16 thread groups
         uint32_t groupSizeY = (COMPUTE_TEST_HEIGHT + 15) / 16;
-        const uint32_t numElements = COMPUTE_TEST_WIDTH * COMPUTE_TEST_HEIGHT;
-        float *outputBuffer = (float*)malloc(sizeof(float) * numElements);
-
         const ispc::ComputeTestData settings = { 
             .width = COMPUTE_TEST_WIDTH,
             .height = COMPUTE_TEST_HEIGHT
-            };
-        // settings.width = COMPUTE_TEST_WIDTH;
-        // settings.height = COMPUTE_TEST_HEIGHT;
+        };
+        ispc::CS_MAIN_TEST(pBasicOutputBuffer, settings, groupSizeX, groupSizeY, 1);
+        // LOGF(LogLevel::eINFO, "CPU Compute Test Results:");
+        // for (uint32_t i = 0; i < 10 && i < COMPUTE_TEST_WIDTH * COMPUTE_TEST_HEIGHT; i++) {
+        //     LOGF(LogLevel::eINFO, "CPU Output[%u] = %f", i, pBasicOutputBuffer[i]);
+        // }
+    }
 
-        ispc::CS_MAIN_TEST(outputBuffer, settings, groupSizeX, groupSizeY, 1);
-        
+    void checkBasicTestOutputs()
+    {
+        float* gpuOutputData = (float*)pOutputBuffer->pCpuMappedAddress;
+        LOGF(LogLevel::eINFO, "Check Basic Compute Test Results:");
+        for (uint32_t i = 0; i < COMPUTE_TEST_WIDTH * COMPUTE_TEST_HEIGHT; ++i) {
+			// LOGF(LogLevel::eINFO, "CPU[%d] = %f", i, pBasicOutputBuffer[i]);
+			// LOGF(LogLevel::eINFO, "GPU[%d] = %f", i, gpuOutputData[i]);
+            if (pBasicOutputBuffer[i] != gpuOutputData[i]) {
 
-        LOGF(LogLevel::eINFO, "CPU Compute Test Results:");
-        for (uint32_t i = 0; i < 10 && i < COMPUTE_TEST_WIDTH * COMPUTE_TEST_HEIGHT; i++) {
-            LOGF(LogLevel::eINFO, "CPU Output[%u] = %f", i, outputBuffer[i]);
+                LOGF(LogLevel::eERROR, "MISMATCH AT [%d] = CPU:%f|GPU:%f", i, pBasicOutputBuffer[i], gpuOutputData[i]);
+                return;
+            }
+            // ASSERT(pBasicOutputBuffer[i] == gpuOutputData[i]);
         }
-        free(outputBuffer);
+        LOGF(LogLevel::eINFO, "Basic Compute Test: PASSED");
     }
 
     void initializeDistanceFieldInput(float* inputBuffer, uint32_t width, uint32_t height) 
@@ -549,13 +662,6 @@ private:
         
         uint32_t groupSizeX = (COMPUTE_TEST_WIDTH + 15) / 16;
         uint32_t groupSizeY = (COMPUTE_TEST_HEIGHT + 15) / 16;
-        const uint32_t numElements = COMPUTE_TEST_WIDTH * COMPUTE_TEST_HEIGHT;
-        
-        float* inputBuffer = (float*)malloc(sizeof(float) * numElements);
-        float* outputBuffer = (float*)malloc(sizeof(float) * numElements);
-        
-        // Initialize input buffer with a test pattern
-        initializeDistanceFieldInput(inputBuffer, COMPUTE_TEST_WIDTH, COMPUTE_TEST_HEIGHT);
         
         ispc::DistanceFieldParams params = {
             .width = COMPUTE_TEST_WIDTH,
@@ -564,17 +670,14 @@ private:
             .padding = 0.0f
         };
 
-        ispc::CS_MAIN_DISTFIELD(inputBuffer, outputBuffer, params, groupSizeX, groupSizeY, 1);
+        ispc::CS_MAIN_DISTFIELD(pDistfieldCpuInputBuffer, pDistfieldCpuOutputBuffer, params, groupSizeX, groupSizeY, 1);
         
         // Print some results to verify
         LOGF(LogLevel::eINFO, "Distance Field Test Results:");
         for (uint32_t i = 0; i < 10 && i < COMPUTE_TEST_WIDTH * COMPUTE_TEST_HEIGHT; i++) {
             LOGF(LogLevel::eINFO, "Input[%u] = %f, Output[%u] = %f", 
-                i, inputBuffer[i], i, outputBuffer[i]);
+                i, pDistfieldCpuInputBuffer[i], i, pDistfieldCpuOutputBuffer[i]);
         }
-        
-        free(inputBuffer);
-        free(outputBuffer);
     }
 
 
@@ -607,9 +710,9 @@ private:
     SwapChain* pSwapChain = NULL;
     Buffer* pOutputBuffer = NULL;
     Buffer* pUniformBuffer = NULL;
-    Buffer* pDistfieldBufferInput;
-    Buffer* pDistfieldBufferOutput;
-    Buffer* pDistfieldBufferParams;
+    Buffer* pDistfieldBufferInput = NULL;
+    Buffer* pDistfieldBufferOutput = NULL;
+    Buffer* pDistfieldBufferParams = NULL;
     Shader* pComputeShader = NULL;
     Shader* pDistFieldShader = NULL;
     RootSignature* pRootSignature = NULL;
@@ -620,6 +723,18 @@ private:
     Pipeline* pDistFieldPipeline = NULL;
     Semaphore* pImageAcquiredSemaphore = NULL;
     UIComponent* pGuiWindow = NULL;
+    UIComponent* pDebugWindow = NULL;
+
+    float *pBasicOutputBuffer = NULL;
+    float* pDistfieldCpuInputBuffer = NULL;
+    float* pDistfieldCpuOutputBuffer = NULL;
+    
+    Texture* pBasicCpuOutput = NULL;
+    Texture* pBasicGpuOutput = NULL;
+    // Texture* pDistfieldCpuInput = NULL;
+    // Texture* pDistfieldGpuInput = NULL;
+    // Texture* pDistfieldCpuOutput = NULL;
+    // Texture* pDistfieldGpuOutput = NULL;
 };
 
 DEFINE_APPLICATION_MAIN(CPUComputeTest)
