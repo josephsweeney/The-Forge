@@ -16,7 +16,8 @@
 #include "../../../../Common_3/Utilities/RingBuffer.h"
 
 #include "ISPC/test.comp.h"
-#include "ISPC/distfield.comp.h"
+#include "ISPC/distfield_init.comp.h"
+#include "ISPC/distfield_flood.comp.h"
 // NOTE(joesweeney): Right now these share the same namespace and define global variables to match shader semantics
 // within the ISPC code. This means they can't have any name collisions for resources and for their entry function name.
 // This is handled in the generator, but something to keep in mind when adding new shaders here if you get linker errors.
@@ -24,6 +25,12 @@
 // Test parameters 
 static const uint32_t COMPUTE_TEST_WIDTH = 512;
 static const uint32_t COMPUTE_TEST_HEIGHT = 512;
+
+ispc::DistanceFieldParams gDistfieldParams = {
+    .width = COMPUTE_TEST_WIDTH,
+    .height = COMPUTE_TEST_HEIGHT,
+    .threshold = 0.5f,
+};
 
 struct ComputeTestData {
     uint32_t width;
@@ -35,13 +42,14 @@ ProfileToken gGpuComputeToken;
 
 uint32_t gFontID = 0;
 uint64_t gTestCounter = 0;
+bool gRunTests = true;
+uint32_t gDistfieldFloodPushConstantIndex = 5;
 
 class CPUComputeTest: public IApp 
 {
 public:
     bool Init() override
     {
-        // Initialize renderer with basic settings
         RendererDesc settings = {};
         initGPUConfiguration(settings.pExtendedSettings);
         initRenderer(GetName(), &settings, &pRenderer);
@@ -54,7 +62,6 @@ public:
         profiler.pRenderer = pRenderer;
         initProfiler(&profiler);
 
-        // Create compute queue...
         QueueDesc queueDesc = {};
         queueDesc.mType = QUEUE_TYPE_COMPUTE;
         initQueue(pRenderer, &queueDesc, &pQueue);
@@ -66,7 +73,6 @@ public:
         cmdRingDesc.mAddSyncPrimitives = true;
         initGpuCmdRing(pRenderer, &cmdRingDesc, &mCmdRing);
 
-        // Create a single command pool and command buffer
         CmdPoolDesc cmdPoolDesc = {};
         cmdPoolDesc.pQueue = pQueue;
         initCmdPool(pRenderer, &cmdPoolDesc, &pCmdPool);
@@ -79,7 +85,6 @@ public:
 
         const uint32_t numElements = COMPUTE_TEST_WIDTH * COMPUTE_TEST_HEIGHT;
 
-        // Create output buffer 
         BufferLoadDesc outputDesc = {};
         outputDesc.ppBuffer = &pOutputBuffer;
         outputDesc.mDesc.mDescriptors = DESCRIPTOR_TYPE_BUFFER | DESCRIPTOR_TYPE_RW_BUFFER;
@@ -93,16 +98,14 @@ public:
         addResource(&outputDesc, &token);
         waitForToken(&token);
 
-        // Create uniform buffer with test dimensions
         BufferLoadDesc uniformDesc = {};
-        uniformDesc.ppBuffer = &pUniformBuffer;  // Add this line
+        uniformDesc.ppBuffer = &pUniformBuffer;
         uniformDesc.mDesc.mDescriptors = DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         uniformDesc.mDesc.mMemoryUsage = RESOURCE_MEMORY_USAGE_CPU_TO_GPU;
         uniformDesc.mDesc.mFlags = BUFFER_CREATION_FLAG_PERSISTENT_MAP_BIT;
         uniformDesc.mDesc.mSize = sizeof(ComputeTestData); 
         addResource(&uniformDesc, &token);
 
-        // Initialize uniform data
         ComputeTestData* data = (ComputeTestData*)pUniformBuffer->pCpuMappedAddress;
         data->width = COMPUTE_TEST_WIDTH;
         data->height = COMPUTE_TEST_HEIGHT;
@@ -120,7 +123,6 @@ public:
         distfieldInputDesc.pData = pDistfieldGpuInputBuffer;
         addResource(&distfieldInputDesc, &token);
 
-        // Create output buffer
         BufferLoadDesc distfieldOutputDesc = {};
         distfieldOutputDesc.ppBuffer = &pDistfieldBufferOutput;
         distfieldOutputDesc.mDesc.mDescriptors = DESCRIPTOR_TYPE_BUFFER | DESCRIPTOR_TYPE_RW_BUFFER;
@@ -131,15 +133,18 @@ public:
         distfieldOutputDesc.mDesc.mStructStride = sizeof(float);
         addResource(&distfieldOutputDesc, &token);
 
-        BufferLoadDesc distfieldBoundaryDesc = {};
-        distfieldBoundaryDesc.ppBuffer = &pDistfieldBufferBoundary;
-        distfieldBoundaryDesc.mDesc.mDescriptors = DESCRIPTOR_TYPE_BUFFER | DESCRIPTOR_TYPE_RW_BUFFER;
-        distfieldBoundaryDesc.mDesc.mMemoryUsage = RESOURCE_MEMORY_USAGE_GPU_TO_CPU;
-        distfieldBoundaryDesc.mDesc.mFlags = BUFFER_CREATION_FLAG_PERSISTENT_MAP_BIT;
-        distfieldBoundaryDesc.mDesc.mSize = sizeof(uint32_t) * numElements;
-        distfieldBoundaryDesc.mDesc.mElementCount = numElements;
-        distfieldBoundaryDesc.mDesc.mStructStride = sizeof(uint32_t);
-        addResource(&distfieldBoundaryDesc, &token);
+        for (int i = 0; i < 2; ++i) 
+        {
+            BufferLoadDesc distfieldSeedDesc = {};
+            distfieldSeedDesc.ppBuffer = &pDistfieldBufferSeed[i];
+            distfieldSeedDesc.mDesc.mDescriptors = DESCRIPTOR_TYPE_BUFFER | DESCRIPTOR_TYPE_RW_BUFFER;
+            distfieldSeedDesc.mDesc.mMemoryUsage = RESOURCE_MEMORY_USAGE_GPU_TO_CPU;
+            distfieldSeedDesc.mDesc.mFlags = BUFFER_CREATION_FLAG_PERSISTENT_MAP_BIT;
+            distfieldSeedDesc.mDesc.mSize = sizeof(int32_t) * numElements * 2;
+            distfieldSeedDesc.mDesc.mElementCount = numElements;
+            distfieldSeedDesc.mDesc.mStructStride = sizeof(int32_t);
+            addResource(&distfieldSeedDesc, &token);
+        }
 
         BufferLoadDesc paramsDesc = {};
         paramsDesc.mDesc.mDescriptors = DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -148,27 +153,19 @@ public:
         paramsDesc.mDesc.mFlags = BUFFER_CREATION_FLAG_PERSISTENT_MAP_BIT;
         paramsDesc.ppBuffer = &pDistfieldBufferParams;
         
-        ispc::DistanceFieldParams params = {
-            .width = COMPUTE_TEST_WIDTH,
-            .height = COMPUTE_TEST_HEIGHT,
-            .maxDistance = 100.0f,
-            .padding = 0.0f
-        };
-        
-        paramsDesc.pData = &params;
+        paramsDesc.pData = &gDistfieldParams;
         addResource(&paramsDesc, &token);
-
-        initSemaphore(pRenderer, &pImageAcquiredSemaphore);
 
         pBasicOutputBuffer = (float*)malloc(sizeof(float) * numElements);
         pDistfieldCpuInputBuffer = (float*)malloc(sizeof(float) * numElements);
         initializeDistanceFieldInput(pDistfieldCpuInputBuffer, COMPUTE_TEST_WIDTH, COMPUTE_TEST_HEIGHT);
         pDistfieldCpuOutputBuffer = (float*)malloc(sizeof(float) * numElements);
-        pDistfieldCpuBoundaryBuffer = (uint32_t*)malloc(sizeof(uint32_t) * numElements);
+        pDistfieldCpuSeedBuffer[0] = (int32_t*)malloc(sizeof(int32_t) * numElements * 2);
+        pDistfieldCpuSeedBuffer[1] = (int32_t*)malloc(sizeof(int32_t) * numElements * 2);
 
-        initTestTextures(&token);
+        initSemaphore(pRenderer, &pImageAcquiredSemaphore);
+        initDebugTextures(&token);
 
-        // Load fonts
         FontDesc font = {};
         font.pFontPath = "TitilliumText/TitilliumText-Bold.otf";
         fntDefineFonts(&font, 1, &gFontID);
@@ -176,9 +173,8 @@ public:
         FontSystemDesc fontRenderDesc = {};
         fontRenderDesc.pRenderer = pRenderer;
         if (!initFontSystem(&fontRenderDesc))
-            return false; // report?
+            return false;
 
-        // Initialize Forge User Interface Rendering
         UserInterfaceDesc uiRenderDesc = {};
         uiRenderDesc.pRenderer = pRenderer;
         initUserInterface(&uiRenderDesc);
@@ -199,13 +195,15 @@ public:
         removeResource(pDistfieldBufferInput);
         removeResource(pDistfieldBufferOutput);
         removeResource(pDistfieldBufferParams);
-        removeResource(pDistfieldBufferBoundary);
+        removeResource(pDistfieldBufferSeed[0]);
+        removeResource(pDistfieldBufferSeed[1]);
         free(pBasicOutputBuffer);
         free(pDistfieldGpuInputBuffer);
         free(pDistfieldCpuInputBuffer);
         free(pDistfieldCpuOutputBuffer);
-        free(pDistfieldCpuBoundaryBuffer);
-        exitTestTextures();
+        free(pDistfieldCpuSeedBuffer[0]);
+        free(pDistfieldCpuSeedBuffer[1]);
+        exitDebugTextures();
 
         exitProfiler();
         exitUserInterface();
@@ -269,10 +267,15 @@ public:
         removeDescriptorSet(pRenderer, pDescriptorSet);
         removeRootSignature(pRenderer, pRootSignature);
         removeShader(pRenderer, pComputeShader);
-        removeShader(pRenderer, pDistFieldShader);
-        removeRootSignature(pRenderer, pDistFieldRootSignature);
-        removeDescriptorSet(pRenderer, pDistFieldDescriptorSet);
-        removePipeline(pRenderer, pDistFieldPipeline);
+        removeShader(pRenderer, pDistFieldInitShader);
+        removeShader(pRenderer, pDistFieldFloodShader);
+        removeRootSignature(pRenderer, pDistFieldInitRootSignature);
+        removeRootSignature(pRenderer, pDistFieldFloodRootSignature);
+        removeDescriptorSet(pRenderer, pDistFieldInitDescriptorSet);
+        removeDescriptorSet(pRenderer, pDistFieldFloodDescriptorSet[0]);
+        removeDescriptorSet(pRenderer, pDistFieldFloodDescriptorSet[1]);
+        removePipeline(pRenderer, pDistFieldInitPipeline);
+        removePipeline(pRenderer, pDistFieldFloodPipeline);
 
         if (pDebugWindow)
         {
@@ -313,26 +316,29 @@ public:
             }
         }
 
-        if (gTestCounter++ % 600 == 0)
+        if (gTestCounter++ % 60 == 0 && gRunTests)
         {
             runComputeTest();
             runCPUComputeTest();
             checkBasicTestOutputs();
             runDistanceFieldTest();
             runCPUDistanceFieldTest();
+            checkDistanceFieldOutputs();
 
             loadTextureFromFloatBuffer(pBasicCpuOutput, pBasicOutputBuffer);
             loadTextureFromFloatBuffer(pBasicGpuOutput, (float*)pOutputBuffer->pCpuMappedAddress);
             loadTextureFromFloatBuffer(pDistfieldCpuInput, pDistfieldCpuInputBuffer);
             loadTextureFromFloatBuffer(pDistfieldGpuInput, (float*)pDistfieldBufferInput->pCpuMappedAddress);
-            // dumpBenchmarkData(&mSettings);
+            loadTextureFromDistanceFieldHeatMap(pDistfieldCpuOutput, pDistfieldCpuOutputBuffer);
+            loadTextureFromDistanceFieldHeatMap(pDistfieldGpuOutput, (float*)pDistfieldBufferOutput->pCpuMappedAddress);
+            // gRunTests = false;
         }
         
     }
 
     void SetupDebugWindow()
     {
-        float  scale = 0.5f;
+        float  scale = 1.0f;
         float2 screenSize = { (float)COMPUTE_TEST_WIDTH, (float)COMPUTE_TEST_HEIGHT };
         float2 texSize = screenSize * scale;
 
@@ -355,6 +361,7 @@ public:
             uiAddComponentWidget(pDebugWindow, "GPU Basic Output", &label, WIDGET_TYPE_LABEL);
             widget.pTextures = &pBasicGpuOutput;
             uiAddComponentWidget(pDebugWindow, "GPU Basic Input", &widget, WIDGET_TYPE_DEBUG_TEXTURES);
+
             uiAddComponentWidget(pDebugWindow, "Vertical separator", &verticalSeperator, WIDGET_TYPE_VERTICAL_SEPARATOR);
             uiAddComponentWidget(pDebugWindow, "CPU Distfield Input", &label, WIDGET_TYPE_LABEL);
             widget.pTextures = &pDistfieldCpuInput;
@@ -363,6 +370,15 @@ public:
             uiAddComponentWidget(pDebugWindow, "GPU Distfield Input", &label, WIDGET_TYPE_LABEL);
             widget.pTextures = &pDistfieldGpuInput;
             uiAddComponentWidget(pDebugWindow, "GPU Distfield Input", &widget, WIDGET_TYPE_DEBUG_TEXTURES);
+
+            uiAddComponentWidget(pDebugWindow, "Vertical separator", &verticalSeperator, WIDGET_TYPE_VERTICAL_SEPARATOR);
+            uiAddComponentWidget(pDebugWindow, "CPU Distfield Output", &label, WIDGET_TYPE_LABEL);
+            widget.pTextures = &pDistfieldCpuOutput;
+            uiAddComponentWidget(pDebugWindow, "CPU Distfield Output", &widget, WIDGET_TYPE_DEBUG_TEXTURES);
+            uiAddComponentWidget(pDebugWindow, "Vertical separator", &verticalSeperator, WIDGET_TYPE_VERTICAL_SEPARATOR);
+            uiAddComponentWidget(pDebugWindow, "GPU Distfield Output", &label, WIDGET_TYPE_LABEL);
+            widget.pTextures = &pDistfieldGpuOutput;
+            uiAddComponentWidget(pDebugWindow, "GPU Distfield Output", &widget, WIDGET_TYPE_DEBUG_TEXTURES);
 
             uiSetComponentActive(pDebugWindow, true);
         }
@@ -450,9 +466,12 @@ private:
         ShaderLoadDesc computeShader = {};
         computeShader.mComp.pFileName = "test.comp";
         addShader(pRenderer, &computeShader, &pComputeShader);
-        ShaderLoadDesc distFieldShader = {};
-        distFieldShader.mComp.pFileName = "distfield.comp";
-        addShader(pRenderer, &distFieldShader, &pDistFieldShader);
+        ShaderLoadDesc distFieldInitShader = {};
+        distFieldInitShader.mComp.pFileName = "distfield_init.comp";
+        addShader(pRenderer, &distFieldInitShader, &pDistFieldInitShader);
+        ShaderLoadDesc distFieldFloodShader = {};
+        distFieldFloodShader.mComp.pFileName = "distfield_flood.comp";
+        addShader(pRenderer, &distFieldFloodShader, &pDistFieldFloodShader);
     }
 
     void createRootSignature()
@@ -463,8 +482,12 @@ private:
         addRootSignature(pRenderer, &rootDesc, &pRootSignature);
         RootSignatureDesc distFieldRootDesc = {};
         distFieldRootDesc.mShaderCount = 1;
-        distFieldRootDesc.ppShaders = &pDistFieldShader;
-        addRootSignature(pRenderer, &distFieldRootDesc, &pDistFieldRootSignature);
+        distFieldRootDesc.ppShaders = &pDistFieldInitShader;
+        addRootSignature(pRenderer, &distFieldRootDesc, &pDistFieldInitRootSignature);
+        RootSignatureDesc distFieldFloodRootDesc = {};
+        distFieldFloodRootDesc.mShaderCount = 1;
+        distFieldFloodRootDesc.ppShaders = &pDistFieldFloodShader;
+        addRootSignature(pRenderer, &distFieldFloodRootDesc, &pDistFieldFloodRootSignature);
     }
 
     void createDescriptorSet()
@@ -472,8 +495,12 @@ private:
         DescriptorSetDesc setDesc = { pRootSignature, DESCRIPTOR_UPDATE_FREQ_NONE, 1 };
         addDescriptorSet(pRenderer, &setDesc, &pDescriptorSet);
 
-        DescriptorSetDesc distFieldSetDesc = { pDistFieldRootSignature, DESCRIPTOR_UPDATE_FREQ_NONE, 1 };
-        addDescriptorSet(pRenderer, &distFieldSetDesc, &pDistFieldDescriptorSet);
+        DescriptorSetDesc distFieldInitSetDesc = { pDistFieldInitRootSignature, DESCRIPTOR_UPDATE_FREQ_NONE, 1 };
+        addDescriptorSet(pRenderer, &distFieldInitSetDesc, &pDistFieldInitDescriptorSet);
+
+        DescriptorSetDesc distFieldFloodSetDesc = { pDistFieldFloodRootSignature, DESCRIPTOR_UPDATE_FREQ_NONE, 1 };
+        addDescriptorSet(pRenderer, &distFieldFloodSetDesc, &pDistFieldFloodDescriptorSet[0]);
+        addDescriptorSet(pRenderer, &distFieldFloodSetDesc, &pDistFieldFloodDescriptorSet[1]);
     }
 
     void createPipeline()
@@ -485,12 +512,19 @@ private:
         computeDesc.pShaderProgram = pComputeShader;
         addPipeline(pRenderer, &desc, &pComputePipeline);
 
-        PipelineDesc distFieldDesc = {};
-        distFieldDesc.mType = PIPELINE_TYPE_COMPUTE;
-        ComputePipelineDesc& distFieldComputeDesc = distFieldDesc.mComputeDesc;
-        distFieldComputeDesc.pRootSignature = pDistFieldRootSignature;
-        distFieldComputeDesc.pShaderProgram = pDistFieldShader;
-        addPipeline(pRenderer, &distFieldDesc, &pDistFieldPipeline);
+        PipelineDesc distfieldInitDesc = {};
+        distfieldInitDesc.mType = PIPELINE_TYPE_COMPUTE;
+        ComputePipelineDesc& distFieldInitComputeDesc = distfieldInitDesc.mComputeDesc;
+        distFieldInitComputeDesc.pRootSignature = pDistFieldInitRootSignature;
+        distFieldInitComputeDesc.pShaderProgram = pDistFieldInitShader;
+        addPipeline(pRenderer, &distfieldInitDesc, &pDistFieldInitPipeline);
+
+        PipelineDesc distfieldFloodDesc = {};
+        distfieldFloodDesc.mType = PIPELINE_TYPE_COMPUTE;
+        ComputePipelineDesc& distfieldFloodComputeDesc = distfieldFloodDesc.mComputeDesc;
+        distfieldFloodComputeDesc.pRootSignature = pDistFieldFloodRootSignature;
+        distfieldFloodComputeDesc.pShaderProgram = pDistFieldFloodShader;
+        addPipeline(pRenderer, &distfieldFloodDesc, &pDistFieldFloodPipeline);
     }
 
     void updateDescriptors()
@@ -501,19 +535,32 @@ private:
         params[1].pName = "gSettings";  
         params[1].ppBuffers = &pUniformBuffer;
         updateDescriptorSet(pRenderer, 0, pDescriptorSet, 2, params);
-        DescriptorData distfieldParams[4] = {};
+        DescriptorData distfieldParams[3] = {};
         distfieldParams[0].pName = "gInputBuffer";
         distfieldParams[0].ppBuffers = &pDistfieldBufferInput;
-        distfieldParams[1].pName = "gOutputBuffer";
-        distfieldParams[1].ppBuffers = &pDistfieldBufferOutput;
-        distfieldParams[2].pName = "gBoundaryBuffer";
-        distfieldParams[2].ppBuffers = &pDistfieldBufferBoundary;
-        distfieldParams[3].pName = "gParams";
-        distfieldParams[3].ppBuffers = &pDistfieldBufferParams;
-        updateDescriptorSet(pRenderer, 0, pDistFieldDescriptorSet, 4, distfieldParams);
+        distfieldParams[1].pName = "gSeedBuffer";
+        distfieldParams[1].ppBuffers = &pDistfieldBufferSeed[0];
+        distfieldParams[2].pName = "gParams";
+        distfieldParams[2].ppBuffers = &pDistfieldBufferParams;
+        updateDescriptorSet(pRenderer, 0, pDistFieldInitDescriptorSet, 3, distfieldParams);
+        for (int i = 0; i < 2; ++i)
+        {
+            DescriptorData distfieldFloodParams[5] = {};
+            distfieldFloodParams[0].pName = "gFloodInputBuffer";
+            distfieldFloodParams[0].ppBuffers = &pDistfieldBufferInput;
+            distfieldFloodParams[1].pName = "gFloodOutputBuffer";
+            distfieldFloodParams[1].ppBuffers = &pDistfieldBufferOutput;
+            distfieldFloodParams[2].pName = "gFloodSeedBufferIn";
+            distfieldFloodParams[2].ppBuffers = &pDistfieldBufferSeed[i];
+            distfieldFloodParams[3].pName = "gFloodSeedBufferOut";
+            distfieldFloodParams[3].ppBuffers = &pDistfieldBufferSeed[1-i];
+            distfieldFloodParams[4].pName = "gFloodParams";
+            distfieldFloodParams[4].ppBuffers = &pDistfieldBufferParams;
+            updateDescriptorSet(pRenderer, 0, pDistFieldFloodDescriptorSet[i], 5, distfieldFloodParams);
+        }
     }
 
-    void initTestTextures(SyncToken* token)
+    void initDebugTextures(SyncToken* token)
     {
         TextureDesc texDesc = {};
         texDesc.mWidth = COMPUTE_TEST_WIDTH;
@@ -543,14 +590,35 @@ private:
         distfieldGpuDesc.ppTexture = &pDistfieldGpuInput;
         distfieldGpuDesc.pDesc = &texDesc;
         addResource(&distfieldGpuDesc, token);
+
+        TextureDesc distfieldHeatmapDesc = {};
+        distfieldHeatmapDesc.mWidth = COMPUTE_TEST_WIDTH;
+        distfieldHeatmapDesc.mHeight = COMPUTE_TEST_HEIGHT;
+        distfieldHeatmapDesc.mDepth = 1;
+        distfieldHeatmapDesc.mArraySize = 1;
+        distfieldHeatmapDesc.mMipLevels = 1;
+        distfieldHeatmapDesc.mSampleCount = SAMPLE_COUNT_1;
+        distfieldHeatmapDesc.mFormat = TinyImageFormat_R8G8B8A8_UNORM;
+        distfieldHeatmapDesc.mDescriptors = DESCRIPTOR_TYPE_TEXTURE;
+        distfieldHeatmapDesc.mStartState = RESOURCE_STATE_SHADER_RESOURCE;
+        TextureLoadDesc distfieldCpuOutDesc = {};
+        distfieldCpuOutDesc.ppTexture = &pDistfieldCpuOutput;
+        distfieldCpuOutDesc.pDesc = &distfieldHeatmapDesc;
+        addResource(&distfieldCpuOutDesc, token);
+        TextureLoadDesc distfieldGpuOutDesc = {};
+        distfieldGpuOutDesc.ppTexture = &pDistfieldGpuOutput;
+        distfieldGpuOutDesc.pDesc = &distfieldHeatmapDesc;
+        addResource(&distfieldGpuOutDesc, token);
     }
 
-    void exitTestTextures()
+    void exitDebugTextures()
     {
         removeResource(pBasicCpuOutput);
         removeResource(pBasicGpuOutput);
         removeResource(pDistfieldCpuInput);
         removeResource(pDistfieldGpuInput);
+        removeResource(pDistfieldCpuOutput);
+        removeResource(pDistfieldGpuOutput);
     }
 
     void loadTextureFromFloatBuffer(Texture* pTexture, float* pBuffer) 
@@ -565,17 +633,45 @@ private:
         updateDesc.mLayerCount = 1;
 
         beginUpdateResource(&updateDesc);
-        
-        // Get the subresource layout info
         TextureSubresourceUpdate subresDesc = updateDesc.getSubresourceUpdateDesc(0, 0);
-        
-        for (uint32_t y = 0; y < height; ++y) {
-            uint8_t* dstRow = (uint8_t*)subresDesc.pMappedData + y * subresDesc.mDstRowStride;
-            uint8_t* srcRow = (uint8_t*)pBuffer + y * width * sizeof(float);
-            memcpy(dstRow, srcRow, width * sizeof(float));
-        }
-
+        memcpy((uint8_t*)subresDesc.pMappedData, (uint8_t*)pBuffer, width * height * sizeof(float));
         endUpdateResource(&updateDesc);
+    }
+
+    void loadTextureFromDistanceFieldHeatMap(Texture* pTexture, float* pBuffer) {
+        int width = COMPUTE_TEST_WIDTH;
+        int height = COMPUTE_TEST_HEIGHT;
+        float maxDistance = 0;
+        for (uint32_t i = 0; i < width * height; i++) {
+            float dist = abs(pBuffer[i]);
+            if (dist > maxDistance) {
+                maxDistance = dist;
+            }
+        }
+        uint32_t* colorBuffer = (uint32_t*)malloc(width * height * sizeof(uint32_t));
+        for (uint32_t i = 0; i < width * height; i++) {
+            float normalized = (pBuffer[i] + maxDistance) / (2.0f * maxDistance);
+            normalized = normalized < 0.0f ? 0.0f : (normalized > 1.0f ? 1.0f : normalized);
+            normalized = normalized * normalized;
+            uint8_t r = (uint8_t)(normalized * 255.0f);
+            uint8_t b = (uint8_t)((1.0f - normalized) * 255.0f);
+            uint8_t g = 0;
+            uint8_t a = 255;
+
+            colorBuffer[i] = (a << 24) | (r << 16) | (g << 8) | b;
+        }
+        TextureUpdateDesc updateDesc = {};
+        updateDesc.pTexture = pTexture;
+        updateDesc.mBaseMipLevel = 0;
+        updateDesc.mMipLevels = 1;
+        updateDesc.mBaseArrayLayer = 0;
+        updateDesc.mLayerCount = 1;
+        
+        beginUpdateResource(&updateDesc);
+        TextureSubresourceUpdate subresDesc = updateDesc.getSubresourceUpdateDesc(0, 0);
+        memcpy((uint8_t*)subresDesc.pMappedData, (uint8_t*)colorBuffer, width * height * sizeof(uint32_t));
+        endUpdateResource(&updateDesc);
+        free(colorBuffer);
     }
     
     void runComputeTest()
@@ -587,42 +683,60 @@ private:
         cmdBindPipeline(pCmd, pComputePipeline);
         cmdBindDescriptorSet(pCmd, 0, pDescriptorSet);
 
-        uint32_t groupSizeX = (COMPUTE_TEST_WIDTH + 7) / 8;
-        uint32_t groupSizeY = (COMPUTE_TEST_HEIGHT + 7) / 8;
+        uint32_t groupSizeX = (COMPUTE_TEST_WIDTH + 15) / 16;
+        uint32_t groupSizeY = (COMPUTE_TEST_HEIGHT + 15) / 16;
         cmdDispatch(pCmd, groupSizeX, groupSizeY, 1);
 
         endCmd(pCmd);
 
-        // Submit work
         QueueSubmitDesc submitDesc = {};
         submitDesc.mCmdCount = 1;
         submitDesc.ppCmds = &pCmd;
         submitDesc.mSubmitDone = true;
         queueSubmit(pQueue, &submitDesc);
 
-        // Wait for work to complete
         waitQueueIdle(pQueue);
-
-        // Print results 
-        // float* outputData = (float*)pOutputBuffer->pCpuMappedAddress;
-        // LOGF(LogLevel::eINFO, "Compute Test Results:");
-        // for (uint32_t i = 0; i < 10 && i < COMPUTE_TEST_WIDTH * COMPUTE_TEST_HEIGHT; i++) {
-        //     LOGF(LogLevel::eINFO, "Output[%u] = %f", i, outputData[i]);
-        // }
     }
 
     void runDistanceFieldTest()
     {
         PROFILER_SET_CPU_SCOPE("Tests", "GPU Distance Field ", 0x222222);
-        
-        // uint32_t groupSizeX = (COMPUTE_TEST_WIDTH + 15) / 16;
-        // uint32_t groupSizeY = (COMPUTE_TEST_HEIGHT + 15) / 16;
 
         beginCmd(pCmd);
         
-        cmdBindPipeline(pCmd, pDistFieldPipeline);
-        cmdBindDescriptorSet(pCmd, 0, pDistFieldDescriptorSet);
-        cmdDispatch(pCmd, COMPUTE_TEST_WIDTH, COMPUTE_TEST_HEIGHT, 1);
+        cmdBindPipeline(pCmd, pDistFieldInitPipeline);
+        cmdBindDescriptorSet(pCmd, 0, pDistFieldInitDescriptorSet);
+        uint32_t groupSizeX = (COMPUTE_TEST_WIDTH + 15) / 16;
+        uint32_t groupSizeY = (COMPUTE_TEST_HEIGHT + 15) / 16;
+        cmdDispatch(pCmd, groupSizeX, groupSizeY, 1);
+
+        BufferBarrier distfieldBarrier[5] = {};
+        distfieldBarrier[0].pBuffer = pDistfieldBufferInput;
+        distfieldBarrier[0].mCurrentState = RESOURCE_STATE_UNORDERED_ACCESS;
+        distfieldBarrier[0].mNewState = RESOURCE_STATE_UNORDERED_ACCESS;
+        distfieldBarrier[1].pBuffer = pDistfieldBufferOutput;
+        distfieldBarrier[1].mCurrentState = RESOURCE_STATE_UNORDERED_ACCESS;
+        distfieldBarrier[1].mNewState = RESOURCE_STATE_UNORDERED_ACCESS;
+        distfieldBarrier[2].pBuffer = pDistfieldBufferSeed[0];
+        distfieldBarrier[2].mCurrentState = RESOURCE_STATE_UNORDERED_ACCESS;
+        distfieldBarrier[2].mNewState = RESOURCE_STATE_UNORDERED_ACCESS;
+        distfieldBarrier[3].pBuffer = pDistfieldBufferSeed[1];
+        distfieldBarrier[3].mCurrentState = RESOURCE_STATE_UNORDERED_ACCESS;
+        distfieldBarrier[3].mNewState = RESOURCE_STATE_UNORDERED_ACCESS;
+        distfieldBarrier[4].pBuffer = pDistfieldBufferParams;
+        distfieldBarrier[4].mCurrentState = RESOURCE_STATE_UNORDERED_ACCESS;
+        distfieldBarrier[4].mNewState = RESOURCE_STATE_UNORDERED_ACCESS;
+
+        int currentSeedBuffer = 0;
+        for (int step = 8; step >= 0; --step) {
+            cmdResourceBarrier(pCmd, 5, distfieldBarrier, 0, NULL, 0, NULL);
+            ispc::RootConstantData stepData = { (uint)step };
+            cmdBindPushConstants(pCmd, pDistFieldFloodRootSignature, gDistfieldFloodPushConstantIndex, &stepData);
+            cmdBindPipeline(pCmd, pDistFieldFloodPipeline);
+            cmdBindDescriptorSet(pCmd, 0, pDistFieldFloodDescriptorSet[currentSeedBuffer]);
+            cmdDispatch(pCmd, groupSizeX, groupSizeY, 1);
+            currentSeedBuffer = 1 - currentSeedBuffer;
+        }
         
         endCmd(pCmd);
         QueueSubmitDesc submitDesc = {};
@@ -631,12 +745,6 @@ private:
         submitDesc.mSubmitDone = true;
         queueSubmit(pQueue, &submitDesc);
         waitQueueIdle(pQueue);
-
-        float* outputData = (float*)pDistfieldBufferOutput->pCpuMappedAddress;
-        LOGF(LogLevel::eINFO, "Compute Test Results:");
-        for (uint32_t i = 0; i < 10 && i < COMPUTE_TEST_WIDTH * COMPUTE_TEST_HEIGHT; i++) {
-            LOGF(LogLevel::eINFO, "Output[%u] = %f", i, outputData[i]);
-        }
     }
 
     void runCPUComputeTest()
@@ -647,10 +755,6 @@ private:
             .height = COMPUTE_TEST_HEIGHT
         };
         ispc::CS_MAIN_TEST(pBasicOutputBuffer, settings, COMPUTE_TEST_WIDTH, COMPUTE_TEST_HEIGHT, 1);
-        // LOGF(LogLevel::eINFO, "CPU Compute Test Results:");
-        // for (uint32_t i = 0; i < 10 && i < COMPUTE_TEST_WIDTH * COMPUTE_TEST_HEIGHT; i++) {
-        //     LOGF(LogLevel::eINFO, "CPU Output[%u] = %f", i, pBasicOutputBuffer[i]);
-        // }
     }
 
     void checkBasicTestOutputs()
@@ -661,31 +765,44 @@ private:
             if (pBasicOutputBuffer[i] != gpuOutputData[i]) {
 
                 LOGF(LogLevel::eERROR, "MISMATCH AT [%d] = CPU:%f|GPU:%f", i, pBasicOutputBuffer[i], gpuOutputData[i]);
+                gRunTests = false;
             }
-            ASSERT(pBasicOutputBuffer[i] == gpuOutputData[i]);
         }
         LOGF(LogLevel::eINFO, "Basic Compute Test: PASSED");
     }
 
     void initializeDistanceFieldInput(float* inputBuffer, uint32_t width, uint32_t height) 
     {
-        // Fill with white background (1.0)
         for (uint32_t i = 0; i < width * height; i++) 
         {
             inputBuffer[i] = 1.0f;
         }
 
-        // Create a simple black (0.0) rectangle to simulate text
-        uint32_t rectX = width / 4;
-        uint32_t rectY = height / 4;
-        uint32_t rectWidth = width / 2;
-        uint32_t rectHeight = height / 2;
+        // Create a cross/plus shape in black (0.0)
+        uint32_t centerX = width / 2;
+        uint32_t centerY = height / 2;
+        uint32_t armWidth = width / 8; 
+        uint32_t armLength = height / 3;
 
-        for (uint32_t y = rectY; y < rectY + rectHeight; y++) 
+        // Draw horizontal arm
+        for (uint32_t y = centerY - armWidth/2; y < centerY + armWidth/2; y++) 
         {
-            for (uint32_t x = rectX; x < rectX + rectWidth; x++) 
+            for (uint32_t x = centerX - armLength; x < centerX + armLength; x++) 
             {
-                inputBuffer[y * width + x] = 0.0f;  // Black "text"
+                if (x < width && y < height) {
+                    inputBuffer[y * width + x] = 0.0f;
+                }
+            }
+        }
+
+        // Draw vertical arm
+        for (uint32_t y = centerY - armLength; y < centerY + armLength; y++) 
+        {
+            for (uint32_t x = centerX - armWidth/2; x < centerX + armWidth/2; x++) 
+            {
+                if (x < width && y < height) {
+                    inputBuffer[y * width + x] = 0.0f;
+                }
             }
         }
     }
@@ -693,24 +810,30 @@ private:
     void runCPUDistanceFieldTest()
     {
         PROFILER_SET_CPU_SCOPE("Tests", "CPU Distance Field", 0x222222);
-        
-        ispc::DistanceFieldParams params = {
-            .width = COMPUTE_TEST_WIDTH,
-            .height = COMPUTE_TEST_HEIGHT,
-            .maxDistance = 100.0f,
-            .padding = 0.0f
-        };
 
-        ispc::CS_MAIN_DISTFIELD(pDistfieldCpuInputBuffer, pDistfieldCpuOutputBuffer, pDistfieldCpuBoundaryBuffer, params, COMPUTE_TEST_WIDTH, COMPUTE_TEST_HEIGHT, 1);
-        
-        // Print some results to verify
-        LOGF(LogLevel::eINFO, "Distance Field Test Results:");
-        for (uint32_t i = 0; i < 10 && i < COMPUTE_TEST_WIDTH * COMPUTE_TEST_HEIGHT; i++) {
-            LOGF(LogLevel::eINFO, "Input[%u] = %f, Output[%u] = %f", 
-                i, pDistfieldCpuInputBuffer[i], i, pDistfieldCpuOutputBuffer[i]);
+        ispc::CS_MAIN_DISTFIELD_INIT(pDistfieldCpuInputBuffer, pDistfieldCpuSeedBuffer[0], gDistfieldParams, COMPUTE_TEST_WIDTH, COMPUTE_TEST_HEIGHT, 1);
+        int currentSeedBuffer = 0;
+        for (int step = 8; step >= 0; --step) {
+            ispc::RootConstantData stepData = { (uint)step };
+            ispc::CS_MAIN_DISTFIELD_FLOOD(pDistfieldCpuInputBuffer, pDistfieldCpuOutputBuffer, pDistfieldCpuSeedBuffer[currentSeedBuffer], pDistfieldCpuSeedBuffer[1-currentSeedBuffer], gDistfieldParams, stepData, COMPUTE_TEST_WIDTH, COMPUTE_TEST_HEIGHT, 1);
+            currentSeedBuffer = 1 - currentSeedBuffer;
         }
     }
 
+    void checkDistanceFieldOutputs()
+    {
+        float threshold = 0.001f;
+        float* gpuOutputData = (float*)pDistfieldBufferOutput->pCpuMappedAddress;
+        LOGF(LogLevel::eINFO, "Check Distance Field Compute Test Results:");
+        for (uint32_t i = 0; i < COMPUTE_TEST_WIDTH * COMPUTE_TEST_HEIGHT; ++i) {
+            float error = abs(pDistfieldCpuOutputBuffer[i] - gpuOutputData[i]);
+            if (error > threshold) {
+                LOGF(LogLevel::eERROR, "MISMATCH AT [%d] = CPU:%f|GPU:%f", i, pDistfieldCpuOutputBuffer[i], gpuOutputData[i]);
+                gRunTests = false;
+            }
+        }
+        LOGF(LogLevel::eINFO, "Distance Field Compute Test: PASSED");
+    }
 
 
     bool addSwapChain()
@@ -744,15 +867,20 @@ private:
     Buffer* pDistfieldBufferInput = NULL;
     Buffer* pDistfieldBufferOutput = NULL;
     Buffer* pDistfieldBufferParams = NULL;
-    Buffer* pDistfieldBufferBoundary = NULL;
+    Buffer* pDistfieldBufferSeed[2] = { NULL, NULL };
     Shader* pComputeShader = NULL;
-    Shader* pDistFieldShader = NULL;
+    Shader* pDistFieldInitShader = NULL;
+    Shader* pDistFieldFloodShader = NULL;
+
     RootSignature* pRootSignature = NULL;
-    RootSignature* pDistFieldRootSignature = NULL;
+    RootSignature* pDistFieldInitRootSignature = NULL;
+    RootSignature* pDistFieldFloodRootSignature = NULL;
     DescriptorSet* pDescriptorSet = NULL;
-    DescriptorSet* pDistFieldDescriptorSet = NULL;
+    DescriptorSet* pDistFieldInitDescriptorSet = NULL;
+    DescriptorSet* pDistFieldFloodDescriptorSet[2] = { NULL, NULL };
     Pipeline* pComputePipeline = NULL;
-    Pipeline* pDistFieldPipeline = NULL;
+    Pipeline* pDistFieldInitPipeline = NULL;
+    Pipeline* pDistFieldFloodPipeline = NULL;
     Semaphore* pImageAcquiredSemaphore = NULL;
     UIComponent* pGuiWindow = NULL;
     UIComponent* pDebugWindow = NULL;
@@ -761,14 +889,14 @@ private:
     float* pDistfieldCpuInputBuffer = NULL;
     float* pDistfieldCpuOutputBuffer = NULL;
     float* pDistfieldGpuInputBuffer = NULL;
-    uint32_t* pDistfieldCpuBoundaryBuffer = NULL;
+    int32_t* pDistfieldCpuSeedBuffer[2] = { NULL, NULL };
     
     Texture* pBasicCpuOutput = NULL;
     Texture* pBasicGpuOutput = NULL;
     Texture* pDistfieldCpuInput = NULL;
     Texture* pDistfieldGpuInput = NULL;
-    // Texture* pDistfieldCpuOutput = NULL;
-    // Texture* pDistfieldGpuOutput = NULL;
+    Texture* pDistfieldCpuOutput = NULL;
+    Texture* pDistfieldGpuOutput = NULL;
 };
 
 DEFINE_APPLICATION_MAIN(CPUComputeTest)

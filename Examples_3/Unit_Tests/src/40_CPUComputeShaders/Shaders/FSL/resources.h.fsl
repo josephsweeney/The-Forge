@@ -6,4 +6,10 @@ STRUCT(ComputeTestData) {
     DATA(uint32_t, height, None);
 };
 
+STRUCT(DistanceFieldParams) {
+    DATA(uint, width, None);     
+    DATA(uint, height, None);
+    DATA(float, threshold, None);
+};
+
 #endif

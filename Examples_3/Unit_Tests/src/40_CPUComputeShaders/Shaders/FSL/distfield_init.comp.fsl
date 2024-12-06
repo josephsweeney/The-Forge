@@ -1,0 +1,64 @@
+#include "fsl_ext.h"
+#include "resources.h.fsl"
+
+RES(Buffer(float), gInputBuffer, UPDATE_FREQ_NONE, t0, binding = 0);
+RES(RWBuffer(int), gSeedBuffer, UPDATE_FREQ_NONE, u1, binding = 1);  // Stores closest boundary point
+RES(CBUFFER(DistanceFieldParams), gParams, UPDATE_FREQ_NONE, b0, binding = 2);
+
+uint getPosIndex(int2 pos, int2 dims)
+{
+    return uint(pos.y * dims.x + pos.x);
+}
+
+NUM_THREADS(16, 16, 1)
+void CS_MAIN(SV_DispatchThreadID(uint3) DTid)
+{
+    INIT_MAIN;
+    
+    int2 pos = int2(DTid.xy);
+    int2 dims = int2(gParams.width, gParams.height);
+    
+    if (pos.x >= dims.x || pos.y >= dims.y)
+        RETURN();
+    
+    uint idx = getPosIndex(pos, dims);
+    float centerValue = gInputBuffer[idx];
+    bool isInside = centerValue > gParams.threshold;
+    
+    // Check if this pixel is on the boundary
+    bool isBoundary = false;
+    if (pos.x > 0 && pos.x < dims.x - 1 && pos.y > 0 && pos.y < dims.y - 1)
+    {
+        int leftIndex = getPosIndex(pos + int2(-1, 0), dims);
+        float left = gInputBuffer[leftIndex];
+        int rightIndex = getPosIndex(pos + int2(1, 0), dims);
+        float right = gInputBuffer[rightIndex];
+        int upIndex = getPosIndex(pos + int2(0, -1), dims);
+        float up = gInputBuffer[upIndex];
+        int downIndex = getPosIndex(pos + int2(0, 1), dims);
+        float down = gInputBuffer[downIndex];
+        
+        bool leftIn = left > gParams.threshold;
+        bool rightIn = right > gParams.threshold;
+        bool upIn = up > gParams.threshold;
+        bool downIn = down > gParams.threshold;
+        
+        isBoundary = (leftIn != isInside || rightIn != isInside || 
+                     upIn != isInside || downIn != isInside);
+    }
+    
+    // Store packed coordinates
+    uint seedIdx = idx * 2;
+    if (isBoundary)
+    {
+        gSeedBuffer[seedIdx] = pos.x;
+        gSeedBuffer[seedIdx + 1] = pos.y;
+    }
+    else
+    {
+        gSeedBuffer[seedIdx] = -1;
+        gSeedBuffer[seedIdx + 1] = -1;
+    }
+    
+    RETURN();
+}

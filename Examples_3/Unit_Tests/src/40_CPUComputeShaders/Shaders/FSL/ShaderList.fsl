@@ -3,6 +3,10 @@
 #include "test.comp.fsl"
 #end
 
-#comp DISTFIELD_COMP distfield.comp
-#include "distfield.comp.fsl"
+#comp DISTFIELD_INIT_COMP distfield_init.comp
+#include "distfield_init.comp.fsl"
+#end
+
+#comp DISTFIELD_FLOOD_COMP distfield_flood.comp
+#include "distfield_flood.comp.fsl"
 #end

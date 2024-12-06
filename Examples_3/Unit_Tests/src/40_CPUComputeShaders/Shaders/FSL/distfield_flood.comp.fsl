@@ -1,0 +1,75 @@
+#include "fsl_ext.h"
+#include "resources.h.fsl"
+RES(Buffer(float), gFloodInputBuffer, UPDATE_FREQ_NONE, t0, binding = 0);
+RES(RWBuffer(float), gFloodOutputBuffer, UPDATE_FREQ_NONE, u0, binding = 1);
+RES(RWBuffer(int), gFloodSeedBufferIn, UPDATE_FREQ_NONE, u1, binding = 2);
+RES(RWBuffer(int), gFloodSeedBufferOut, UPDATE_FREQ_NONE, u1, binding = 3);
+RES(CBUFFER(DistanceFieldParams), gFloodParams, UPDATE_FREQ_NONE, b0, binding = 4);
+STRUCT(RootConstantData) {
+	DATA(uint, stepIndex, None);
+};
+RES(ROOT_CONSTANT(RootConstantData), RootConstant, UPDATE_FREQ_NONE, b1, binding = 5);
+
+uint getPosIndex(int2 pos, int2 dims)
+{
+    return uint(pos.y * dims.x + pos.x);
+}
+
+NUM_THREADS(16, 16, 1)
+void CS_MAIN(SV_DispatchThreadID(uint3) DTid)
+{
+    INIT_MAIN;
+    
+    int2 pos = int2(DTid.xy);
+    int2 dims = int2(gFloodParams.width, gFloodParams.height);
+    
+    if (pos.x >= dims.x || pos.y >= dims.y)
+        RETURN();
+        
+    uint idx = getPosIndex(pos, dims);
+    int jumpSize = int(1) << RootConstant.stepIndex;
+    
+    uint seedIdx = idx * 2;
+    int2 closestSeed = int2(gFloodSeedBufferIn[seedIdx], gFloodSeedBufferIn[seedIdx + 1]);
+    float minDistSq = 1e18;
+    
+    // Sample 8 neighboring points at current jump distance
+    for (int dy = -1; dy <= 1; dy++)
+    {
+        for (int dx = -1; dx <= 1; dx++)
+        {
+            int2 samplePos = pos + int2(dx, dy) * jumpSize;
+            
+            if (samplePos.x < 0 || samplePos.x >= dims.x || 
+                samplePos.y < 0 || samplePos.y >= dims.y)
+                continue;
+                
+            uint sampleSeedIdx = getPosIndex(samplePos, dims) * 2;
+            int2 seed = int2(gFloodSeedBufferIn[sampleSeedIdx], gFloodSeedBufferIn[sampleSeedIdx + 1]);
+            
+            if (seed.x != -1)  // If valid seed point
+            {
+                float2 offset = float2(pos - seed);
+                float distSq = dot(offset, offset);
+                if (distSq < minDistSq)
+                {
+                    minDistSq = distSq;
+                    closestSeed = seed;
+                }
+            }
+        }
+    }
+    
+    // Store packed coordinates of closest seed
+    gFloodSeedBufferOut[seedIdx] = closestSeed.x;
+    gFloodSeedBufferOut[seedIdx + 1] = closestSeed.y;
+    
+    // On final pass, compute signed distance
+    if (jumpSize == 1)
+    {
+        float sign = gFloodInputBuffer[idx] > gFloodParams.threshold ? -1.0 : 1.0;
+        gFloodOutputBuffer[idx] = (closestSeed.x != -1) ? sign * sqrt(minDistSq) : sign * 1e9;
+    }
+    
+    RETURN();
+}

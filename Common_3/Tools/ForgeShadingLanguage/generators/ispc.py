@@ -28,6 +28,11 @@ from utils import getMacroFirstArg, getHeader, getShader, getMacro, platform_lan
 from utils import get_fn_table, Features
 import os, re
 
+# TODO(joesweeney):
+# - Texture support
+# - Other builtin functions normally available in shaders
+# - Actually use NUM_THREADS rather than ignoring to more directly match GPU
+
 MAIN_WRAPPER_FSTRING = """export void {}({}uniform int dispatch_x, uniform int dispatch_y, uniform int dispatch_z) {{
     {}
     foreach_tiled (z = 0 ... dispatch_z, y = 0 ... dispatch_y, x = 0 ... dispatch_x) {{
@@ -102,20 +107,14 @@ def ispc_internal(platform, debug, binary: ShaderBinary, dst):
     shader_src = getHeader(fsl)
 
     dependencies = []
-
-    # shader_src += [f'#define {platform.name}\n']
-    # shader_src += [f'#define {platform_langs[platform]}\n']
         
     shader_src += ['#define STAGE_' + shader.stage.name + '\n']
     if shader.waveops_flags != WaveopsFlags.WAVE_OPS_NONE:
         shader_src += ['#define ENABLE_WAVEOPS(flags)\n']
 
-    # directly embed d3d header in shader
     header_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'includes', 'ispc.h')
     header_lines = open(header_path).readlines()
     shader_src += header_lines + ['\n']
-
-    nonuniformresourceindex = None
 
     resources = []
     main_impl_args = []
@@ -157,7 +156,7 @@ def ispc_internal(platform, debug, binary: ShaderBinary, dst):
 
         if resource_decl:
             dtype, name, _, _, _ = resource_decl
-            base_type = getMacro(dtype)  # Gets inner type
+            base_type = getMacro(dtype)
             base_name = getArrayBaseName(name)
             is_array = isArray(name)
             is_readonly = not ('RW' in dtype or 'W' == dtype[:1])
@@ -170,30 +169,21 @@ def ispc_internal(platform, debug, binary: ShaderBinary, dst):
                 'is_readonly': is_readonly,
             }]
             global_var_decl = ""
-            if 'CBUFFER' in dtype:
+            if 'CBUFFER' in dtype or 'ROOT_CONSTANT' in dtype:
                 global_var_decl = f"{base_type} {name};"
             else:
                 global_var_decl = f"{base_type} *{base_name};"
             line = f'{global_var_decl} // {line}'
 
-        # if '_MAIN(' in line and shader.returnType:
-        #     if shader.returnType not in shader.structs:
-        #         if shader.stage == Stages.FRAG:
-        #             if not 'SV_DEPTH' in shader.returnType.upper():
-        #                 line = line.rstrip() + ': SV_TARGET\n'
-        #             else:
-        #                 line = line.rstrip() + ': SV_DEPTH\n'
-        #         if shader.stage == Stages.VERT:
-        #             line = line.rstrip() + ': SV_POSITION\n'
-        #             if Features.INVARIANT in binary.features:
-        #                 line = 'precise ' + line
-
         if '_MAIN(' in line:
+            if shader.stage != Stages.COMP:
+                print("ISPC backend only supports compute shaders at this time.")
+                return None
             leading_args = ''
             global_assignments = ''
             for res in resources:
                 # main_impl_args += [res]
-                if 'CBUFFER' in res['type']:
+                if 'CBUFFER' in res['type'] or 'ROOT_CONSTANT' in res['type']:
                     leading_args += f"uniform const {res['base_type']}& {res['name']}_arg,"
                 else:
                     readonly = "const " if res['is_readonly'] else ""
@@ -228,19 +218,6 @@ def ispc_internal(platform, debug, binary: ShaderBinary, dst):
             impl_args = ",".join([f"{arg['name']}" for arg in main_impl_args])
             impl_declared_vars = "\n".join([arg['arg_needed'] if 'arg_needed' in arg else '' for arg in main_impl_args])
             main_str = convert_ispc_symbols(MAIN_WRAPPER_FSTRING.format(main_name, leading_args, global_assignments, impl_declared_vars, main_name, impl_args))
-
-        # if 'BeginNonUniformResourceIndex(' in line:
-        #     index, max_index = getMacro(line), None
-        #     assert index != [], 'No index provided for {}'.format(line)
-        #     if type(index) == list:
-        #         max_index = index[1]
-        #         index = index[0]
-        #     nonuniformresourceindex = index
-        #     line = '#define {0} NonUniformResourceIndex({0})\n'.format(nonuniformresourceindex)
-        # if 'EndNonUniformResourceIndex()' in line:
-        #     assert nonuniformresourceindex, 'EndNonUniformResourceIndex: BeginNonUniformResourceIndex not called/found'
-        #     line = '#undef {}\n'.format(nonuniformresourceindex)
-        #     nonuniformresourceindex = None
 
         elif re.match(r'\s*RETURN', line):
             if shader.returnType:

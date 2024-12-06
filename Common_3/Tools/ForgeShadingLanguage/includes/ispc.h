@@ -77,17 +77,31 @@ inline uint<2> make_uint2(float<2> v) {
     return result;
 }
 
+inline float dot(float<2> v1, float<2> v2) {
+    return v1.x * v2.x + v1.y * v2.y;
+}
+
+inline float dot(float<3> v1, float<3> v2) {
+    return v1.x * v2.x + v1.y * v2.y + v1.z * v2.z;
+}
+
+inline float dot(float<4> v1, float<4> v2) {
+    return v1.x * v2.x + v1.y * v2.y + v1.z * v2.z + v1.w * v2.w;
+}
+
 inline float length(float<2> v) {
-    return sqrt(v.x * v.x + v.y * v.y);
+    return sqrt(dot(v, v));
 }
 
 inline float length(float<3> v) {
-    return sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+    return sqrt(dot(v, v));
 }
 
 inline float length(float<4> v) {
-    return sqrt(v.x * v.x + v.y * v.y + v.z * v.z + v.w * v.w);
+    return sqrt(dot(v, v));
 }
+
+
 
 
 
