@@ -8,19 +8,13 @@ NUM_THREADS(16, 16, 1)
 void CS_MAIN(SV_DispatchThreadID(uint2) tid) 
 {
     INIT_MAIN;
-    
     if (tid.x >= gSettings.width || tid.y >= gSettings.height)
     {
         RETURN();
     }
-
     uint index = tid.y * gSettings.width + tid.x;
-    
     // Simple computation - use position as color
     float value = (float)(tid.x + tid.y) / (float)(gSettings.width + gSettings.height);
-    
-    // Write to output buffer
     gOutput[index] = value;
-
     RETURN();
 }

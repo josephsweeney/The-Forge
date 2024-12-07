@@ -32,7 +32,6 @@ inline T<4> make_##T##4(T x, T y, T z, T w) { \
     return result; \
 }
 
-// Generate all vector constructors
 MAKE_VECTOR2(int)
 MAKE_VECTOR2(uint)
 MAKE_VECTOR2(float)
@@ -48,7 +47,6 @@ MAKE_VECTOR4(uint)
 MAKE_VECTOR4(float)
 MAKE_VECTOR4(bool)
 
-// Conversion functions (not macros)
 inline float<2> make_float2(uint<2> v) { 
     float<2> result;
     result.x = (float)v.x;
@@ -100,9 +98,5 @@ inline float length(float<3> v) {
 inline float length(float<4> v) {
     return sqrt(dot(v, v));
 }
-
-
-
-
 
 #endif

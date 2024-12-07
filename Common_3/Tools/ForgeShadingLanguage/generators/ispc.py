@@ -22,9 +22,9 @@
 
 """ ISPC shader generation """
 
-from utils import Stages, DescriptorSets, WaveopsFlags, ShaderBinary, Platforms, iter_lines
-from utils import isArray, getArrayLen, getArrayBaseName, getMacroName
-from utils import getMacroFirstArg, getHeader, getShader, getMacro, platform_langs, get_whitespace
+from utils import Stages, WaveopsFlags, ShaderBinary, Platforms, iter_lines
+from utils import isArray, getArrayBaseName
+from utils import getHeader, getShader, getMacro, get_whitespace
 from utils import get_fn_table, Features
 import os, re
 
@@ -124,13 +124,12 @@ def ispc_internal(platform, debug, binary: ShaderBinary, dst):
     skip_semantics = False
 
     for fi, line_index, line in iter_lines(shader.lines):
-
         shader_src_len = len(shader_src)
-
 
         if line.strip().startswith('STRUCT('):
             parsing_struct = getMacro(line)
-            line = 'struct ' + parsing_struct +  ' {\n'
+            open_brace = '{' if '{' in line else ''
+            line = 'struct ' + parsing_struct + f' {open_brace}\n'
 
         if parsing_struct and line.strip().startswith('DATA('):
             data_decl = getMacro(line)
@@ -142,9 +141,7 @@ def ispc_internal(platform, debug, binary: ShaderBinary, dst):
                     line = get_whitespace(line) + 'precise ' + line.strip() + '\n'
 
         if parsing_struct and '};' in line:
-
             shader_src += ['// line {}\n'.format(line_index), line]
-
             skip_semantics = False
             parsing_struct = None
             continue
@@ -152,7 +149,6 @@ def ispc_internal(platform, debug, binary: ShaderBinary, dst):
         resource_decl = None
         if line.strip().startswith('RES('):
             resource_decl = getMacro(line)
-
 
         if resource_decl:
             dtype, name, _, _, _ = resource_decl
@@ -182,7 +178,6 @@ def ispc_internal(platform, debug, binary: ShaderBinary, dst):
             leading_args = ''
             global_assignments = ''
             for res in resources:
-                # main_impl_args += [res]
                 if 'CBUFFER' in res['type'] or 'ROOT_CONSTANT' in res['type']:
                     leading_args += f"uniform const {res['base_type']}& {res['name']}_arg,"
                 else:
@@ -238,11 +233,8 @@ def ispc_internal(platform, debug, binary: ShaderBinary, dst):
             line = ''
 
         line = convert_ispc_symbols(line)
-
         shader_src += [line]
+
     shader_src += [main_str]
-
-
     open(dst, 'w').writelines(shader_src)
-
     return 0, dependencies

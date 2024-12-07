@@ -22,7 +22,6 @@
 // within the ISPC code. This means they can't have any name collisions for resources and for their entry function name.
 // This is handled in the generator, but something to keep in mind when adding new shaders here if you get linker errors.
 
-// Test parameters 
 static const uint32_t COMPUTE_TEST_WIDTH = 512;
 static const uint32_t COMPUTE_TEST_HEIGHT = 512;
 
@@ -30,11 +29,6 @@ ispc::DistanceFieldParams gDistfieldParams = {
     .width = COMPUTE_TEST_WIDTH,
     .height = COMPUTE_TEST_HEIGHT,
     .threshold = 0.5f,
-};
-
-struct ComputeTestData {
-    uint32_t width;
-    uint32_t height;
 };
 
 ProfileToken gCpuComputeToken;
@@ -103,10 +97,10 @@ public:
         uniformDesc.mDesc.mDescriptors = DESCRIPTOR_TYPE_UNIFORM_BUFFER;
         uniformDesc.mDesc.mMemoryUsage = RESOURCE_MEMORY_USAGE_CPU_TO_GPU;
         uniformDesc.mDesc.mFlags = BUFFER_CREATION_FLAG_PERSISTENT_MAP_BIT;
-        uniformDesc.mDesc.mSize = sizeof(ComputeTestData); 
+        uniformDesc.mDesc.mSize = sizeof(ispc::ComputeTestData); 
         addResource(&uniformDesc, &token);
 
-        ComputeTestData* data = (ComputeTestData*)pUniformBuffer->pCpuMappedAddress;
+        ispc::ComputeTestData* data = (ispc::ComputeTestData*)pUniformBuffer->pCpuMappedAddress;
         data->width = COMPUTE_TEST_WIDTH;
         data->height = COMPUTE_TEST_HEIGHT;
     
@@ -229,11 +223,6 @@ public:
         updateDescriptors();
         loadProfilerUI(mSettings.mWidth, mSettings.mHeight);
         toggleProfilerUI(true);
-
-        UIComponentDesc guiDesc = {};
-        guiDesc.mStartPosition = vec2(mSettings.mWidth * 0.1f, mSettings.mHeight * 0.2f);
-        uiAddComponent(GetName(), &guiDesc, &pGuiWindow);
-
         if (!addSwapChain()) {
             return false;
         }
@@ -286,8 +275,6 @@ public:
         if (pReloadDesc->mType & (RELOAD_TYPE_RESIZE | RELOAD_TYPE_RENDERTARGET))
         {
             removeSwapChain(pRenderer, pSwapChain);
-
-            uiRemoveComponent(pGuiWindow);
             unloadProfilerUI();
         }
     }
@@ -331,57 +318,8 @@ public:
             loadTextureFromFloatBuffer(pDistfieldGpuInput, (float*)pDistfieldBufferInput->pCpuMappedAddress);
             loadTextureFromDistanceFieldHeatMap(pDistfieldCpuOutput, pDistfieldCpuOutputBuffer);
             loadTextureFromDistanceFieldHeatMap(pDistfieldGpuOutput, (float*)pDistfieldBufferOutput->pCpuMappedAddress);
-            // gRunTests = false;
         }
         
-    }
-
-    void SetupDebugWindow()
-    {
-        float  scale = 1.0f;
-        float2 screenSize = { (float)COMPUTE_TEST_WIDTH, (float)COMPUTE_TEST_HEIGHT };
-        float2 texSize = screenSize * scale;
-
-        if (!pDebugWindow)
-        {
-            UIComponentDesc UIComponentDesc = {};
-            UIComponentDesc.mStartSize = vec2(UIComponentDesc.mStartSize.getX(), UIComponentDesc.mStartSize.getY());
-            UIComponentDesc.mStartPosition.setY(mSettings.mHeight * 0.1f);
-            uiAddComponent("DEBUG Compute Outputs", &UIComponentDesc, &pDebugWindow);
-
-            LabelWidget label = {};
-            uiAddComponentWidget(pDebugWindow, "CPU Basic Output", &label, WIDGET_TYPE_LABEL);
-            DebugTexturesWidget widget;
-            widget.pTextures = &pBasicCpuOutput;
-            widget.mTexturesCount = 1;
-            widget.mTextureDisplaySize = texSize;
-            uiAddComponentWidget(pDebugWindow, "CPU Basic Output", &widget, WIDGET_TYPE_DEBUG_TEXTURES);
-            VerticalSeparatorWidget verticalSeperator = { 1 };
-            uiAddComponentWidget(pDebugWindow, "Vertical separator", &verticalSeperator, WIDGET_TYPE_VERTICAL_SEPARATOR);
-            uiAddComponentWidget(pDebugWindow, "GPU Basic Output", &label, WIDGET_TYPE_LABEL);
-            widget.pTextures = &pBasicGpuOutput;
-            uiAddComponentWidget(pDebugWindow, "GPU Basic Input", &widget, WIDGET_TYPE_DEBUG_TEXTURES);
-
-            uiAddComponentWidget(pDebugWindow, "Vertical separator", &verticalSeperator, WIDGET_TYPE_VERTICAL_SEPARATOR);
-            uiAddComponentWidget(pDebugWindow, "CPU Distfield Input", &label, WIDGET_TYPE_LABEL);
-            widget.pTextures = &pDistfieldCpuInput;
-            uiAddComponentWidget(pDebugWindow, "CPU Distfield Input", &widget, WIDGET_TYPE_DEBUG_TEXTURES);
-            uiAddComponentWidget(pDebugWindow, "Vertical separator", &verticalSeperator, WIDGET_TYPE_VERTICAL_SEPARATOR);
-            uiAddComponentWidget(pDebugWindow, "GPU Distfield Input", &label, WIDGET_TYPE_LABEL);
-            widget.pTextures = &pDistfieldGpuInput;
-            uiAddComponentWidget(pDebugWindow, "GPU Distfield Input", &widget, WIDGET_TYPE_DEBUG_TEXTURES);
-
-            uiAddComponentWidget(pDebugWindow, "Vertical separator", &verticalSeperator, WIDGET_TYPE_VERTICAL_SEPARATOR);
-            uiAddComponentWidget(pDebugWindow, "CPU Distfield Output", &label, WIDGET_TYPE_LABEL);
-            widget.pTextures = &pDistfieldCpuOutput;
-            uiAddComponentWidget(pDebugWindow, "CPU Distfield Output", &widget, WIDGET_TYPE_DEBUG_TEXTURES);
-            uiAddComponentWidget(pDebugWindow, "Vertical separator", &verticalSeperator, WIDGET_TYPE_VERTICAL_SEPARATOR);
-            uiAddComponentWidget(pDebugWindow, "GPU Distfield Output", &label, WIDGET_TYPE_LABEL);
-            widget.pTextures = &pDistfieldGpuOutput;
-            uiAddComponentWidget(pDebugWindow, "GPU Distfield Output", &widget, WIDGET_TYPE_DEBUG_TEXTURES);
-
-            uiSetComponentActive(pDebugWindow, true);
-        }
     }
 
     void Draw() override
@@ -560,6 +498,24 @@ private:
         }
     }
 
+    bool addSwapChain()
+    {
+        SwapChainDesc swapChainDesc = {};
+        swapChainDesc.mColorClearValue = {};
+        swapChainDesc.mEnableVsync = mSettings.mVSyncEnabled;
+        swapChainDesc.mWidth = mSettings.mWidth;
+        swapChainDesc.mHeight = mSettings.mHeight;
+        swapChainDesc.mImageCount = getRecommendedSwapchainImageCount(pRenderer, &pWindow->handle);
+        swapChainDesc.ppPresentQueues = &pQueue;
+        swapChainDesc.mPresentQueueCount = 1;
+        swapChainDesc.mWindowHandle = pWindow->handle;
+        swapChainDesc.mColorFormat = getSupportedSwapchainFormat(pRenderer, &swapChainDesc, COLOR_SPACE_SDR_SRGB);
+        swapChainDesc.mColorSpace = COLOR_SPACE_SDR_SRGB;
+        ::addSwapChain(pRenderer, &swapChainDesc, &pSwapChain);
+
+        return pSwapChain != NULL;
+    }
+
     void initDebugTextures(SyncToken* token)
     {
         TextureDesc texDesc = {};
@@ -666,7 +622,7 @@ private:
         updateDesc.mMipLevels = 1;
         updateDesc.mBaseArrayLayer = 0;
         updateDesc.mLayerCount = 1;
-        
+
         beginUpdateResource(&updateDesc);
         TextureSubresourceUpdate subresDesc = updateDesc.getSubresourceUpdateDesc(0, 0);
         memcpy((uint8_t*)subresDesc.pMappedData, (uint8_t*)colorBuffer, width * height * sizeof(uint32_t));
@@ -674,6 +630,55 @@ private:
         free(colorBuffer);
     }
     
+    void SetupDebugWindow()
+    {
+        float  scale = 1.0f;
+        float2 screenSize = { (float)COMPUTE_TEST_WIDTH, (float)COMPUTE_TEST_HEIGHT };
+        float2 texSize = screenSize * scale;
+
+        if (!pDebugWindow)
+        {
+            UIComponentDesc UIComponentDesc = {};
+            UIComponentDesc.mStartSize = vec2(COMPUTE_TEST_WIDTH, COMPUTE_TEST_HEIGHT);
+            UIComponentDesc.mStartPosition.setY(mSettings.mHeight * 0.1f);
+            uiAddComponent("DEBUG Compute Outputs", &UIComponentDesc, &pDebugWindow);
+
+            LabelWidget label = {};
+            uiAddComponentWidget(pDebugWindow, "CPU Basic Output", &label, WIDGET_TYPE_LABEL);
+            DebugTexturesWidget widget;
+            widget.pTextures = &pBasicCpuOutput;
+            widget.mTexturesCount = 1;
+            widget.mTextureDisplaySize = texSize;
+            // Basic Test Outputs
+            uiAddComponentWidget(pDebugWindow, "CPU Basic Output", &widget, WIDGET_TYPE_DEBUG_TEXTURES);
+            VerticalSeparatorWidget verticalSeperator = { 1 };
+            uiAddComponentWidget(pDebugWindow, "Vertical separator", &verticalSeperator, WIDGET_TYPE_VERTICAL_SEPARATOR);
+            uiAddComponentWidget(pDebugWindow, "GPU Basic Output", &label, WIDGET_TYPE_LABEL);
+            widget.pTextures = &pBasicGpuOutput;
+            uiAddComponentWidget(pDebugWindow, "GPU Basic Input", &widget, WIDGET_TYPE_DEBUG_TEXTURES);
+            // Distance Field Inputs
+            uiAddComponentWidget(pDebugWindow, "Vertical separator", &verticalSeperator, WIDGET_TYPE_VERTICAL_SEPARATOR);
+            uiAddComponentWidget(pDebugWindow, "CPU Distfield Input", &label, WIDGET_TYPE_LABEL);
+            widget.pTextures = &pDistfieldCpuInput;
+            uiAddComponentWidget(pDebugWindow, "CPU Distfield Input", &widget, WIDGET_TYPE_DEBUG_TEXTURES);
+            uiAddComponentWidget(pDebugWindow, "Vertical separator", &verticalSeperator, WIDGET_TYPE_VERTICAL_SEPARATOR);
+            uiAddComponentWidget(pDebugWindow, "GPU Distfield Input", &label, WIDGET_TYPE_LABEL);
+            widget.pTextures = &pDistfieldGpuInput;
+            uiAddComponentWidget(pDebugWindow, "GPU Distfield Input", &widget, WIDGET_TYPE_DEBUG_TEXTURES);
+            // Distance Field Outputs
+            uiAddComponentWidget(pDebugWindow, "Vertical separator", &verticalSeperator, WIDGET_TYPE_VERTICAL_SEPARATOR);
+            uiAddComponentWidget(pDebugWindow, "CPU Distfield Output", &label, WIDGET_TYPE_LABEL);
+            widget.pTextures = &pDistfieldCpuOutput;
+            uiAddComponentWidget(pDebugWindow, "CPU Distfield Output", &widget, WIDGET_TYPE_DEBUG_TEXTURES);
+            uiAddComponentWidget(pDebugWindow, "Vertical separator", &verticalSeperator, WIDGET_TYPE_VERTICAL_SEPARATOR);
+            uiAddComponentWidget(pDebugWindow, "GPU Distfield Output", &label, WIDGET_TYPE_LABEL);
+            widget.pTextures = &pDistfieldGpuOutput;
+            uiAddComponentWidget(pDebugWindow, "GPU Distfield Output", &widget, WIDGET_TYPE_DEBUG_TEXTURES);
+
+            uiSetComponentActive(pDebugWindow, true);
+        }
+    }
+
     void runComputeTest()
     {
         PROFILER_SET_CPU_SCOPE("Tests", "GPU Basic", 0x222222);
@@ -697,56 +702,7 @@ private:
 
         waitQueueIdle(pQueue);
     }
-
-    void runDistanceFieldTest()
-    {
-        PROFILER_SET_CPU_SCOPE("Tests", "GPU Distance Field ", 0x222222);
-
-        beginCmd(pCmd);
-        
-        cmdBindPipeline(pCmd, pDistFieldInitPipeline);
-        cmdBindDescriptorSet(pCmd, 0, pDistFieldInitDescriptorSet);
-        uint32_t groupSizeX = (COMPUTE_TEST_WIDTH + 15) / 16;
-        uint32_t groupSizeY = (COMPUTE_TEST_HEIGHT + 15) / 16;
-        cmdDispatch(pCmd, groupSizeX, groupSizeY, 1);
-
-        BufferBarrier distfieldBarrier[5] = {};
-        distfieldBarrier[0].pBuffer = pDistfieldBufferInput;
-        distfieldBarrier[0].mCurrentState = RESOURCE_STATE_UNORDERED_ACCESS;
-        distfieldBarrier[0].mNewState = RESOURCE_STATE_UNORDERED_ACCESS;
-        distfieldBarrier[1].pBuffer = pDistfieldBufferOutput;
-        distfieldBarrier[1].mCurrentState = RESOURCE_STATE_UNORDERED_ACCESS;
-        distfieldBarrier[1].mNewState = RESOURCE_STATE_UNORDERED_ACCESS;
-        distfieldBarrier[2].pBuffer = pDistfieldBufferSeed[0];
-        distfieldBarrier[2].mCurrentState = RESOURCE_STATE_UNORDERED_ACCESS;
-        distfieldBarrier[2].mNewState = RESOURCE_STATE_UNORDERED_ACCESS;
-        distfieldBarrier[3].pBuffer = pDistfieldBufferSeed[1];
-        distfieldBarrier[3].mCurrentState = RESOURCE_STATE_UNORDERED_ACCESS;
-        distfieldBarrier[3].mNewState = RESOURCE_STATE_UNORDERED_ACCESS;
-        distfieldBarrier[4].pBuffer = pDistfieldBufferParams;
-        distfieldBarrier[4].mCurrentState = RESOURCE_STATE_UNORDERED_ACCESS;
-        distfieldBarrier[4].mNewState = RESOURCE_STATE_UNORDERED_ACCESS;
-
-        int currentSeedBuffer = 0;
-        for (int step = 8; step >= 0; --step) {
-            cmdResourceBarrier(pCmd, 5, distfieldBarrier, 0, NULL, 0, NULL);
-            ispc::RootConstantData stepData = { (uint)step };
-            cmdBindPushConstants(pCmd, pDistFieldFloodRootSignature, gDistfieldFloodPushConstantIndex, &stepData);
-            cmdBindPipeline(pCmd, pDistFieldFloodPipeline);
-            cmdBindDescriptorSet(pCmd, 0, pDistFieldFloodDescriptorSet[currentSeedBuffer]);
-            cmdDispatch(pCmd, groupSizeX, groupSizeY, 1);
-            currentSeedBuffer = 1 - currentSeedBuffer;
-        }
-        
-        endCmd(pCmd);
-        QueueSubmitDesc submitDesc = {};
-        submitDesc.mCmdCount = 1;
-        submitDesc.ppCmds = &pCmd;
-        submitDesc.mSubmitDone = true;
-        queueSubmit(pQueue, &submitDesc);
-        waitQueueIdle(pQueue);
-    }
-
+    
     void runCPUComputeTest()
     {
         PROFILER_SET_CPU_SCOPE("Tests", "CPU Basic", 0x222222);
@@ -807,6 +763,55 @@ private:
         }
     }
 
+    void runDistanceFieldTest()
+    {
+        PROFILER_SET_CPU_SCOPE("Tests", "GPU Distance Field ", 0x222222);
+
+        beginCmd(pCmd);
+        
+        cmdBindPipeline(pCmd, pDistFieldInitPipeline);
+        cmdBindDescriptorSet(pCmd, 0, pDistFieldInitDescriptorSet);
+        uint32_t groupSizeX = (COMPUTE_TEST_WIDTH + 15) / 16;
+        uint32_t groupSizeY = (COMPUTE_TEST_HEIGHT + 15) / 16;
+        cmdDispatch(pCmd, groupSizeX, groupSizeY, 1);
+
+        BufferBarrier distfieldBarrier[5] = {};
+        distfieldBarrier[0].pBuffer = pDistfieldBufferInput;
+        distfieldBarrier[0].mCurrentState = RESOURCE_STATE_UNORDERED_ACCESS;
+        distfieldBarrier[0].mNewState = RESOURCE_STATE_UNORDERED_ACCESS;
+        distfieldBarrier[1].pBuffer = pDistfieldBufferOutput;
+        distfieldBarrier[1].mCurrentState = RESOURCE_STATE_UNORDERED_ACCESS;
+        distfieldBarrier[1].mNewState = RESOURCE_STATE_UNORDERED_ACCESS;
+        distfieldBarrier[2].pBuffer = pDistfieldBufferSeed[0];
+        distfieldBarrier[2].mCurrentState = RESOURCE_STATE_UNORDERED_ACCESS;
+        distfieldBarrier[2].mNewState = RESOURCE_STATE_UNORDERED_ACCESS;
+        distfieldBarrier[3].pBuffer = pDistfieldBufferSeed[1];
+        distfieldBarrier[3].mCurrentState = RESOURCE_STATE_UNORDERED_ACCESS;
+        distfieldBarrier[3].mNewState = RESOURCE_STATE_UNORDERED_ACCESS;
+        distfieldBarrier[4].pBuffer = pDistfieldBufferParams;
+        distfieldBarrier[4].mCurrentState = RESOURCE_STATE_UNORDERED_ACCESS;
+        distfieldBarrier[4].mNewState = RESOURCE_STATE_UNORDERED_ACCESS;
+
+        int currentSeedBuffer = 0;
+        for (int step = 8; step >= 0; --step) {
+            cmdResourceBarrier(pCmd, 5, distfieldBarrier, 0, NULL, 0, NULL);
+            ispc::RootConstantData stepData = { (uint)step };
+            cmdBindPushConstants(pCmd, pDistFieldFloodRootSignature, gDistfieldFloodPushConstantIndex, &stepData);
+            cmdBindPipeline(pCmd, pDistFieldFloodPipeline);
+            cmdBindDescriptorSet(pCmd, 0, pDistFieldFloodDescriptorSet[currentSeedBuffer]);
+            cmdDispatch(pCmd, groupSizeX, groupSizeY, 1);
+            currentSeedBuffer = 1 - currentSeedBuffer;
+        }
+        
+        endCmd(pCmd);
+        QueueSubmitDesc submitDesc = {};
+        submitDesc.mCmdCount = 1;
+        submitDesc.ppCmds = &pCmd;
+        submitDesc.mSubmitDone = true;
+        queueSubmit(pQueue, &submitDesc);
+        waitQueueIdle(pQueue);
+    }
+
     void runCPUDistanceFieldTest()
     {
         PROFILER_SET_CPU_SCOPE("Tests", "CPU Distance Field", 0x222222);
@@ -833,25 +838,6 @@ private:
             }
         }
         LOGF(LogLevel::eINFO, "Distance Field Compute Test: PASSED");
-    }
-
-
-    bool addSwapChain()
-    {
-        SwapChainDesc swapChainDesc = {};
-        swapChainDesc.mColorClearValue = {};
-        swapChainDesc.mEnableVsync = mSettings.mVSyncEnabled;
-        swapChainDesc.mWidth = mSettings.mWidth;
-        swapChainDesc.mHeight = mSettings.mHeight;
-        swapChainDesc.mImageCount = getRecommendedSwapchainImageCount(pRenderer, &pWindow->handle);
-        swapChainDesc.ppPresentQueues = &pQueue;
-        swapChainDesc.mPresentQueueCount = 1;
-        swapChainDesc.mWindowHandle = pWindow->handle;
-        swapChainDesc.mColorFormat = getSupportedSwapchainFormat(pRenderer, &swapChainDesc, COLOR_SPACE_SDR_SRGB);
-        swapChainDesc.mColorSpace = COLOR_SPACE_SDR_SRGB;
-        ::addSwapChain(pRenderer, &swapChainDesc, &pSwapChain);
-
-        return pSwapChain != NULL;
     }
 
     static const uint32_t gDataBufferCount = 2;
@@ -882,7 +868,6 @@ private:
     Pipeline* pDistFieldInitPipeline = NULL;
     Pipeline* pDistFieldFloodPipeline = NULL;
     Semaphore* pImageAcquiredSemaphore = NULL;
-    UIComponent* pGuiWindow = NULL;
     UIComponent* pDebugWindow = NULL;
 
     float *pBasicOutputBuffer = NULL;
