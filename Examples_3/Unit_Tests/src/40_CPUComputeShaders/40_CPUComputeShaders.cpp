@@ -21,6 +21,8 @@
 // NOTE(joesweeney): Right now these share the same namespace and define global variables to match shader semantics
 // within the ISPC code. This means they can't have any name collisions for resources and for their entry function name.
 // This is handled in the generator, but something to keep in mind when adding new shaders here if you get linker errors.
+#include "distfield_init.h"
+#include "distfield_flood.h"
 
 static const uint32_t COMPUTE_TEST_WIDTH = 512;
 static const uint32_t COMPUTE_TEST_HEIGHT = 512;
@@ -38,6 +40,7 @@ uint32_t gFontID = 0;
 uint64_t gTestCounter = 0;
 bool gRunTests = true;
 uint32_t gDistfieldFloodPushConstantIndex = 5;
+bool gUseHandRolledISPCCode = false;
 
 class CPUComputeTest: public IApp 
 {
@@ -309,7 +312,14 @@ public:
             runCPUComputeTest();
             checkBasicTestOutputs();
             runDistanceFieldTest();
-            runCPUDistanceFieldTest();
+            if (!gUseHandRolledISPCCode) 
+            {
+                runCPUDistanceFieldTest();
+            } 
+            else 
+            {
+                runHandRolledCPUDistanceFieldTest();
+            }
             checkDistanceFieldOutputs();
 
             loadTextureFromFloatBuffer(pBasicCpuOutput, pBasicOutputBuffer);
@@ -642,6 +652,9 @@ private:
             UIComponentDesc.mStartSize = vec2(COMPUTE_TEST_WIDTH, COMPUTE_TEST_HEIGHT);
             UIComponentDesc.mStartPosition.setY(mSettings.mHeight * 0.1f);
             uiAddComponent("DEBUG Compute Outputs", &UIComponentDesc, &pDebugWindow);
+            CheckboxWidget checkbox = {};
+            checkbox.pData = &gUseHandRolledISPCCode;
+            uiAddComponentWidget(pDebugWindow, "Use hand rolled ISPC code", &checkbox, WIDGET_TYPE_CHECKBOX);
 
             LabelWidget label = {};
             uiAddComponentWidget(pDebugWindow, "CPU Basic Output", &label, WIDGET_TYPE_LABEL);
@@ -816,12 +829,37 @@ private:
     {
         PROFILER_SET_CPU_SCOPE("Tests", "CPU Distance Field", 0x222222);
 
-        ispc::CS_MAIN_DISTFIELD_INIT(pDistfieldCpuInputBuffer, pDistfieldCpuSeedBuffer[0], gDistfieldParams, COMPUTE_TEST_WIDTH, COMPUTE_TEST_HEIGHT, 1);
-        int currentSeedBuffer = 0;
-        for (int step = 8; step >= 0; --step) {
-            ispc::RootConstantData stepData = { (uint)step };
-            ispc::CS_MAIN_DISTFIELD_FLOOD(pDistfieldCpuInputBuffer, pDistfieldCpuOutputBuffer, pDistfieldCpuSeedBuffer[currentSeedBuffer], pDistfieldCpuSeedBuffer[1-currentSeedBuffer], gDistfieldParams, stepData, COMPUTE_TEST_WIDTH, COMPUTE_TEST_HEIGHT, 1);
-            currentSeedBuffer = 1 - currentSeedBuffer;
+        {
+            PROFILER_SET_CPU_SCOPE("Tests", "CPU Distance Field INIT", 0x222222);
+            ispc::CS_MAIN_DISTFIELD_INIT(pDistfieldCpuInputBuffer, pDistfieldCpuSeedBuffer[0], gDistfieldParams, COMPUTE_TEST_WIDTH, COMPUTE_TEST_HEIGHT, 1);
+        }
+        {
+            PROFILER_SET_CPU_SCOPE("Tests", "CPU Distance Field FLOOD", 0x222222);
+            int currentSeedBuffer = 0;
+            for (int step = 8; step >= 0; --step) {
+                ispc::RootConstantData stepData = { (uint)step };
+                ispc::CS_MAIN_DISTFIELD_FLOOD(pDistfieldCpuInputBuffer, pDistfieldCpuOutputBuffer, pDistfieldCpuSeedBuffer[currentSeedBuffer], pDistfieldCpuSeedBuffer[1-currentSeedBuffer], gDistfieldParams, stepData, COMPUTE_TEST_WIDTH, COMPUTE_TEST_HEIGHT, 1);
+                currentSeedBuffer = 1 - currentSeedBuffer;
+            }
+        }
+    }
+
+    void runHandRolledCPUDistanceFieldTest()
+    {
+        PROFILER_SET_CPU_SCOPE("Tests", "Hand-Rolled CPU Distance Field", 0x222222);
+
+        {
+            PROFILER_SET_CPU_SCOPE("Tests", "Hand-Rolled CPU Distance Field INIT", 0x222222);
+            ispc::DISTFIELD_INIT(pDistfieldCpuInputBuffer, pDistfieldCpuSeedBuffer[0], gDistfieldParams, COMPUTE_TEST_WIDTH, COMPUTE_TEST_HEIGHT, 1);
+        }
+        {
+            PROFILER_SET_CPU_SCOPE("Tests", "Hand-Rolled CPU Distance Field FLOOD", 0x222222);
+            int currentSeedBuffer = 0;
+            for (int step = 8; step >= 0; --step) {
+                ispc::RootConstantData stepData = { (uint)step };
+                ispc::DISTFIELD_FLOOD(pDistfieldCpuInputBuffer, pDistfieldCpuOutputBuffer, pDistfieldCpuSeedBuffer[currentSeedBuffer], pDistfieldCpuSeedBuffer[1-currentSeedBuffer], gDistfieldParams, stepData, COMPUTE_TEST_WIDTH, COMPUTE_TEST_HEIGHT, 1);
+                currentSeedBuffer = 1 - currentSeedBuffer;
+            }
         }
     }
 

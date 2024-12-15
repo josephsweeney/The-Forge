@@ -29,6 +29,7 @@
 		AC29F9D82A617F0B00868119 /* SanMiguel.cpp in Sources */ = {isa = PBXBuildFile; fileRef = AC29F9D52A617F0000868119 /* SanMiguel.cpp */; };
 		B25042C12214EC10006D133F /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B2087DD221421A13006F372D /* Metal.framework */; };
 		B25042C22214EC10006D133F /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B2087DD121421A13006F372D /* MetalKit.framework */; };
+		D893F7CB2D0F88B9002F6BDA /* ispc_tasks.cpp in Sources */ = {isa = PBXBuildFile; fileRef = D893F7CA2D0F88B9002F6BDA /* ispc_tasks.cpp */; };
 		EC2460492C94F2000002AE10 /* macOSAppDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = EC2460482C94F2000002AE10 /* macOSAppDelegate.m */; };
 		EC24604B2C94F20D0002AE10 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = EC24604A2C94F20D0002AE10 /* Assets.xcassets */; };
 		EC24604D2C94F21D0002AE10 /* Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = EC24604C2C94F21D0002AE10 /* Info.plist */; };
@@ -92,6 +93,7 @@
 		B2087DD121421A13006F372D /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
 		B2087DD221421A13006F372D /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
 		C95132ED2010E68A002E584B /* 40_CPUComputeShaders_iOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = 40_CPUComputeShaders_iOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		D893F7CA2D0F88B9002F6BDA /* ispc_tasks.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = ispc_tasks.cpp; path = ../../src/40_CPUComputeShaders/ispc_tasks.cpp; sourceTree = "<group>"; };
 		E9A438CF233DC1B2005BF1C7 /* libbz2.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libbz2.tbd; path = usr/lib/libbz2.tbd; sourceTree = SDKROOT; };
 		EA463C8B1EF81E8F005AC8C7 /* 40_CPUComputeShaders.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = 40_CPUComputeShaders.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		EC2460472C94F2000002AE10 /* macOSAppDelegate.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = macOSAppDelegate.h; path = ../../../../Common_3/OS/Darwin/macOSAppDelegate.h; sourceTree = "<group>"; };
@@ -200,6 +202,7 @@
 		EA463C821EF81E8F005AC8C7 = {
 			isa = PBXGroup;
 			children = (
+				D893F7CA2D0F88B9002F6BDA /* ispc_tasks.cpp */,
 				EC66B8DD2C936A8F0004DC3B /* Art */,
 				EC66B8D42C93692B0004DC3B /* Examples_3 */,
 				7F6E000C2A93D9DD00981E7B /* BuildConfigs */,
@@ -330,6 +333,7 @@
 			buildConfigurationList = EA463CAC1EF81E8F005AC8C7 /* Build configuration list for PBXNativeTarget "40_CPUComputeShaders" */;
 			buildPhases = (
 				D878F4672CE58F3E004EE291 /* Precompile Shader with ISPC */,
+				D86F24C92D0F6FF600C1CF5D /* Build Hand Written ISPC Code */,
 				EA463C871EF81E8F005AC8C7 /* Sources */,
 				EA463C881EF81E8F005AC8C7 /* Frameworks */,
 				EA463C891EF81E8F005AC8C7 /* Resources */,
@@ -504,6 +508,28 @@
 			shellPath = /bin/sh;
 			shellScript = "DST=\"$CONFIGURATION_BUILD_DIR/$CONTENTS_FOLDER_PATH\"\nASSETS=\"$SRCROOT/../../../../Art\"\nART=\"$SRCROOT/../../../../Art\"\nSRC=\"$SRCROOT/../../src/$PROJECT_NAME\"\nOS=\"$SRCROOT/../../../../Commmon_3/OS\"\nMID=\"$SRCROOT/../../../../Middleware_3\"\n\n# Textures\nrsync -u -rv --include '*/' --include '*.tex' --exclude '*' --prune-empty-dirs \"$ART/Textures/ktx/\" \"$DST/Textures/\"\n\n# Meshes\nrsync -u -r \"$ART/Meshes/\" \"$DST/Meshes\"\n\n# Common resources (Shaders, Fonts, Scripts, GPUCfg)\n# Path is The-Forge/Examples_3/Unit_Tests/macOS Xcode/common_post_build.command\n/bin/sh \"$SRCROOT/../common_post_build.command\" \"$SRC\" \"$SRCROOT\" \"$ASSETS\" \"$DST\" \"$PROJECT_NAME\"\n\n# Necessary because ReloadServer.py expect to be executed with cwd = \"The-Forge\"\ncd \"$SRCROOT/../../../../\"\n/bin/sh \"Common_3/Tools/ReloadServer/ReloadServer.sh\" > \"Common_3/Tools/ReloadServer/server-log.txt\" 2>&1 &\n";
 		};
+		D86F24C92D0F6FF600C1CF5D /* Build Hand Written ISPC Code */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 12;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				$SRCROOT/../../src/$PROJECT_NAME/Shaders/distfield_init.ispc,
+				$SRCROOT/../../src/$PROJECT_NAME/Shaders/distfield_flood.ispc,
+			);
+			name = "Build Hand Written ISPC Code";
+			outputFileListPaths = (
+				"",
+			);
+			outputPaths = (
+				"${BUILT_PRODUCTS_DIR}/DerivedSources/hand_ispc_outputs.xcfilelist",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\n[[ $CONFIGURATION = \"Debug\" ]] && debug=\"--debug\"\n\necho \"Setting up directories...\"\nDERIVED_DIR=\"${BUILT_PRODUCTS_DIR}/DerivedSources\"\necho \"DERIVED_DIR = ${DERIVED_DIR}\"\necho \"Creating directory ${DERIVED_DIR}\"\nmkdir -p \"${DERIVED_DIR}\"\nls -la \"${DERIVED_DIR}\"\n\n\n../../../../Common_3/Tools/ThirdParty/OpenSource/ISPCTextureCompressor/ISPC/osx/ispc --target=neon-i32x4 --emit-obj -o \"${CONFIGURATION_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Resources/CompiledShaders/distfield_init.o\" -h \"${CONFIGURATION_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Resources/CompiledShaders/distfield_init.h\" \"$SRCROOT/../../src/$PROJECT_NAME/Shaders/distfield_init.ispc\"\n../../../../Common_3/Tools/ThirdParty/OpenSource/ISPCTextureCompressor/ISPC/osx/ispc --target=neon-i32x4 --emit-obj -o \"${CONFIGURATION_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Resources/CompiledShaders/distfield_flood.o\" -h \"${CONFIGURATION_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Resources/CompiledShaders/distfield_flood.h\" \"$SRCROOT/../../src/$PROJECT_NAME/Shaders/distfield_flood.ispc\"\n\n# Create output file list for dependency tracking in build directory\nOUTPUTS_FILE=\"${DERIVED_DIR}/hand_ispc_outputs.xcfilelist\"\necho \"Creating outputs file at ${OUTPUTS_FILE}\"\necho \"# ISPC outputs\" > \"${OUTPUTS_FILE}\"\nfind \"${CONFIGURATION_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Resources/CompiledShaders\" -maxdepth 1 -type f \\( -name \"*.h\" -o -name \"*.o\" \\) -exec echo {} \\; >> \"${OUTPUTS_FILE}\"\n\n# Print contents of outputs file\necho \"Contents of ${OUTPUTS_FILE}:\"\ncat \"${OUTPUTS_FILE}\"\n\n# Create linker flags file in build directory\nLINK_FLAGS_FILE=\"${DERIVED_DIR}/hand_ispc_linkflags.xcfilelist\"\necho \"Creating linker flags file at ${LINK_FLAGS_FILE}\"\n> \"${LINK_FLAGS_FILE}\"  # Clear file\nfind \"${CONFIGURATION_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Resources/CompiledShaders\" -maxdepth 1 -type f -name \"*.o\" -print0 | while IFS= read -r -d '' file; do\n    # Quote the path\n    echo \"\\\"$file\\\"\" >> \"${LINK_FLAGS_FILE}\"\ndone\n\n# Print contents of linker flags file\necho \"Contents of ${LINK_FLAGS_FILE}:\"\ncat \"${LINK_FLAGS_FILE}\"\n\n# Verify files exist\necho \"Checking file existence:\"\nif [ -f \"${OUTPUTS_FILE}\" ]; then\n    echo \"${OUTPUTS_FILE} exists\"\nelse\n    echo \"${OUTPUTS_FILE} does not exist\"\nfi\n\nif [ -f \"${LINK_FLAGS_FILE}\" ]; then\n    echo \"${LINK_FLAGS_FILE} exists\"\nelse\n    echo \"${LINK_FLAGS_FILE} does not exist\"\nfi\n\n# Print permissions\necho \"File permissions:\"\nls -l \"${OUTPUTS_FILE}\" || echo \"Could not get permissions for ${OUTPUTS_FILE}\"\nls -l \"${LINK_FLAGS_FILE}\" || echo \"Could not get permissions for ${LINK_FLAGS_FILE}\"\n";
+		};
 		D878F4672CE58F3E004EE291 /* Precompile Shader with ISPC */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
@@ -515,9 +541,11 @@
 			);
 			name = "Precompile Shader with ISPC";
 			outputFileListPaths = (
+				"",
 				"${BUILT_PRODUCTS_DIR}/DerivedSources/ispc_outputs.xcfilelist",
 			);
 			outputPaths = (
+				"",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -540,6 +568,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D893F7CB2D0F88B9002F6BDA /* ispc_tasks.cpp in Sources */,
 				EC2460492C94F2000002AE10 /* macOSAppDelegate.m in Sources */,
 				AC29F9D72A617F0100868119 /* SanMiguel.cpp in Sources */,
 				6512E9F122098AA800B24B31 /* 40_CPUComputeShaders.cpp in Sources */,
@@ -640,11 +669,15 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = "\"${CONFIGURATION_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Resources/CompiledShaders/ISPC\"";
+				LIBRARY_SEARCH_PATHS = (
+					"\"${CONFIGURATION_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Resources/CompiledShaders/ISPC\"",
+					"\"${CONFIGURATION_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Resources/CompiledShaders\"",
+				);
 				OTHER_LDFLAGS = (
 					"$(OLD_LINKER_FLAG_XCODE)",
 					"$(inherited)",
 					"@${BUILT_PRODUCTS_DIR}/DerivedSources/ispc_linkflags.xcfilelist",
+					"@${BUILT_PRODUCTS_DIR}/DerivedSources/hand_ispc_linkflags.xcfilelist",
 					"-v",
 				);
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -664,11 +697,15 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				LIBRARY_SEARCH_PATHS = "\"${CONFIGURATION_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Resources/CompiledShaders/ISPC\"";
+				LIBRARY_SEARCH_PATHS = (
+					"\"${CONFIGURATION_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Resources/CompiledShaders/ISPC\"",
+					"\"${CONFIGURATION_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Resources/CompiledShaders\"",
+				);
 				OTHER_LDFLAGS = (
 					"$(OLD_LINKER_FLAG_XCODE)",
 					"$(inherited)",
 					"@${BUILT_PRODUCTS_DIR}/DerivedSources/ispc_linkflags.xcfilelist",
+					"@${BUILT_PRODUCTS_DIR}/DerivedSources/hand_ispc_linkflags.xcfilelist",
 					"-v",
 				);
 				PRODUCT_NAME = "$(TARGET_NAME)";
